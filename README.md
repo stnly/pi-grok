@@ -1,0 +1,128 @@
+# pi-grok
+
+xAI Grok OAuth provider for [pi](https://pi.dev). Use your SuperGrok subscription with OAuth.
+
+Log in once through your browser. Tokens refresh on their own. No API keys to manage, no billing setup. Switch models, reason through problems, build things.
+
+Brings Grok models into pi using the official xAI OAuth 2.0 flow with PKCE. Your credentials stay on your machine.
+
+## Requirements
+
+- pi v0.74.0 or later
+- xAI SuperGrok subscription
+
+## Install
+
+```bash
+pi install git:github.com/stnly/pi-grok
+```
+
+```
+/reload
+```
+
+Or clone manually:
+
+```bash
+git clone https://github.com/stnly/pi-grok ~/.pi/agent/extensions/pi-grok
+```
+
+```
+/reload
+```
+
+## Quick start
+
+**1. Log in**
+
+```
+/login
+```
+
+Choose **Use a subscription**, select **xAI (SuperGrok Subscription)**. Approve in your browser.
+
+**2. Pick a model**
+
+```
+/model xai-oauth/grok-4.3
+```
+
+`Ctrl+P` cycles models.
+
+## Models
+
+- **grok-build**
+- **grok-4.3**
+- **grok-4.20-0309-reasoning**
+- **grok-4.20-0309-non-reasoning**
+- **grok-4.20-multi-agent-0309**
+
+Filter or reorder with `PI_XAI_OAUTH_MODELS`:
+
+```bash
+export PI_XAI_OAUTH_MODELS="grok-build,grok-4.3"
+```
+
+## How it works
+
+pi starts a local HTTP server on `127.0.0.1:56121` and generates a PKCE challenge. Your browser opens to xAI's authorization page. You approve access. xAI redirects back with an auth code, which pi exchanges for access and refresh tokens.
+
+Tokens refresh 2 minutes before they expire. You stay logged in until you revoke access. Credentials are stored locally and never leave your machine.
+
+Requests go through xAI's Responses API. Tool calling, streaming, and reasoning all work.
+
+## Check status
+
+```
+/xai-status
+```
+
+Shows your login state and available models.
+
+## Env vars
+
+| Variable | Default |
+|---|---|
+| `PI_XAI_BASE_URL` or `XAI_BASE_URL` | `https://api.x.ai/v1` |
+| `PI_XAI_OAUTH_MODELS` | all models |
+| `PI_XAI_OAUTH_CALLBACK_PORT` | `56121` |
+| `PI_XAI_OAUTH_CLIENT_ID` | built-in |
+| `XAI_OAUTH_TOKEN` | skip OAuth, use raw token (no refresh, no discovery) |
+
+## Remote / SSH
+
+Forward port 56121:
+
+```bash
+ssh -N -L 56121:127.0.0.1:56121 user@remote-host
+```
+
+Run `/login` in your remote pi session, complete the browser flow locally. If 56121 is taken, the extension picks a random port and prints it.
+
+## Architecture
+
+```
+pi-grok/
+├── index.ts        # provider registration + event hooks
+├── oauth.ts        # PKCE flow, OIDC discovery, token refresh
+├── models.ts       # model definitions + live catalog from xAI
+├── sanitize.ts     # strips unsupported fields before each request
+├── errors.ts       # typed error classes
+├── package.json
+└── tsconfig.json
+```
+
+- **Payload sanitization via `before_provider_request`** - decoupled from streaming, visible to other extensions, chainable.
+- **Live model catalog** - fetches `api.x.ai/v1/models` on login, merges with built-in list so new Grok releases appear without an extension update.
+- **Typed errors** - `XaiOAuthError` with machine-readable codes for distinguishing retryable vs fatal failures.
+- **Web Crypto** - `crypto.subtle` for PKCE.
+
+## Credits
+
+- [pi](https://pi.dev)
+- [xAI](https://x.ai)
+- [Hermes Agent](https://github.com/NousResearch/hermes-agent)
+
+## License
+
+MIT
