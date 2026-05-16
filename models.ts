@@ -30,7 +30,7 @@ export const FALLBACK_MODELS: XaiModelConfig[] = [
 	{
 		id: "grok-build",
 		name: "Grok Build",
-		reasoning: true,
+		reasoning: false,
 		input: ["text", "image"],
 		cost: COST_BUILD,
 		contextWindow: 1_000_000,
