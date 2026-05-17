@@ -8,8 +8,13 @@
  *   - `function_call_output.output` cannot contain image arrays.
  *   - `image_url` parts must be normalized to `input_image` with data URIs.
  *   - Local image paths must be resolved to base64 data URIs.
+ *   - xAI rejects `role: "developer"` and `role: "system"` in the input
+ *     array; these must be moved to top-level `instructions`.
+ *   - xAI uses `text.format` instead of OpenAI's `response_format`.
+ *   - xAI uses `prompt_cache_key` for conversation caching.
+ *   - xAI doesn't support `prompt_cache_retention`.
  *
- * This module normalizes images and strips unsupported fields before the
+ * This module normalizes images and rewrites unsupported fields before the
  * request is sent.  It's intended to be called from a
  * `before_provider_request` event handler, keeping sanitization decoupled
  * from the streaming implementation.
@@ -19,6 +24,23 @@ import { existsSync, readFileSync } from "fs";
 import { extname, isAbsolute, resolve } from "path";
 import { fileURLToPath } from "url";
 import { supportsReasoningEffort } from "./models.js";
+
+// ─── Content text extraction ─────────────────────────────────────────────────
+
+function textFromContent(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.map((part) => {
+			if (typeof part === "string") return part;
+			if (!part || typeof part !== "object") return "";
+			const item = part as Record<string, unknown>;
+			const type = typeof item.type === "string" ? item.type : "";
+			return ["text", "input_text", "output_text"].includes(type) && typeof item.text === "string" ? item.text : "";
+		})
+		.filter(Boolean)
+		.join("\n");
+}
 
 // ─── Image helpers ────────────────────────────────────────────────────────────
 
@@ -223,6 +245,7 @@ function rewriteFunctionCallOutput(
 export function sanitizePayload(
 	params: Record<string, unknown>,
 	modelId: string,
+	sessionId?: string,
 ): Record<string, unknown> {
 	const next = params;
 
@@ -244,6 +267,24 @@ export function sanitizePayload(
 			})
 			.filter(Boolean) as Record<string, unknown>[];
 
+		// Move system/developer messages to top-level instructions.
+		// xAI rejects role: "developer" and role: "system" in the input array.
+		const instructionParts: string[] = [];
+		while (input.length > 0) {
+			const first = input[0];
+			if (!first || typeof first !== "object") break;
+			const role = (first as Record<string, unknown>).role;
+			if (role !== "developer" && role !== "system") break;
+			const text = textFromContent((first as Record<string, unknown>).content).trim();
+			if (text) instructionParts.push(text);
+			input.shift();
+		}
+		if (instructionParts.length > 0) {
+			const existing = typeof next.instructions === "string" && next.instructions ? next.instructions : "";
+			const merged = [existing, ...instructionParts].filter((part) => part.length > 0).join("\n\n");
+			next.instructions = merged;
+		}
+
 		// Normalize image parts (resolve local paths, fix types)
 		input = normalizeImageParts(input) as Record<string, unknown>[];
 
@@ -251,6 +292,15 @@ export function sanitizePayload(
 		input = rewriteFunctionCallOutput(input);
 
 		next.input = input;
+	} else if (typeof next.input === "string") {
+		// String input is valid and should stay string-shaped.
+	}
+
+	// ── response_format → text.format ────────────────────────────────────
+	// xAI uses { text: { format: ... } } instead of { response_format: ... }.
+	if (next.response_format && !next.text) {
+		next.text = { format: next.response_format };
+		delete next.response_format;
 	}
 
 	// ── Reasoning effort ──────────────────────────────────────────────────
@@ -270,8 +320,22 @@ export function sanitizePayload(
 		delete next.reasoning;
 	}
 
-	// ── Strip unsupported fields ──────────────────────────────────────────
-	delete next.include;
+	// ── Strip/filter unsupported fields ──────────────────────────────────
+	// xAI doesn't support reasoning.encrypted_content in include.
+	if (Array.isArray(next.include)) {
+		next.include = (next.include as unknown[]).filter(
+			(item) => item !== "reasoning.encrypted_content",
+		);
+		if ((next.include as unknown[]).length === 0) delete next.include;
+	}
+
+	// xAI doesn't support prompt_cache_retention.
+	delete next.prompt_cache_retention;
+
+	// Add prompt_cache_key for conversation caching (routes to same server).
+	if (sessionId && !next.prompt_cache_key) {
+		next.prompt_cache_key = sessionId;
+	}
 
 	return next;
 }

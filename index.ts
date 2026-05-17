@@ -101,7 +101,8 @@ export default function (pi: ExtensionAPI) {
 		if (ctx.model?.provider !== "xai-oauth") return;
 
 		const modelId = ctx.model?.id ?? "";
-		return sanitizePayload(event.payload as Record<string, unknown>, modelId);
+		const sessionId = ctx.sessionManager?.getSessionId();
+		return sanitizePayload(event.payload as Record<string, unknown>, modelId, sessionId);
 	});
 
 	// ── X Search tool ─────────────────────────────────────────────────────
