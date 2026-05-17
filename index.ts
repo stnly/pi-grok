@@ -82,12 +82,12 @@ export default function (pi: ExtensionAPI) {
 				return credentials.access;
 			},
 
-			modifyModels(models, credentials) {
+			modifyModels(models: unknown, credentials: unknown) {
 				const effectiveBaseUrl = String(
 					(credentials as XaiOAuthCredentials).baseUrl ?? getBaseUrl(),
 				).replace(/\/+$/, "");
 
-				return models.map((m) =>
+				return (models as Array<Record<string, unknown>>).map((m) =>
 					m.provider === "xai-oauth" ? { ...m, baseUrl: effectiveBaseUrl } : m,
 				);
 			},

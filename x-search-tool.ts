@@ -142,6 +142,7 @@ export function registerXSearchTool(pi: ExtensionAPI) {
 				return {
 					content: [{ type: "text", text: "Error: no xAI credentials. Run /login to authenticate." }],
 					isError: true,
+					details: {},
 				};
 			}
 
@@ -173,6 +174,7 @@ export function registerXSearchTool(pi: ExtensionAPI) {
 
 			return {
 				content: [{ type: "text", text }],
+				details: {},
 			};
 		},
 	});

@@ -31,6 +31,7 @@ export interface XaiDiscovery {
 }
 
 export interface XaiOAuthCredentials {
+	[key: string]: unknown;
 	refresh: string;
 	access: string;
 	expires: number;
