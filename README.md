@@ -89,7 +89,7 @@ Shows your login state and available models.
 | `PI_XAI_OAUTH_CLIENT_ID` | built-in |
 | `XAI_OAUTH_TOKEN` | skip OAuth, use raw token (no refresh, no discovery) |
 | `PI_XAI_X_SEARCH` | `true` |
-| `PI_XAI_X_SEARCH_OPTIONS` | _(none)_ |
+| `PI_XAI_X_SEARCH_MODEL` | `grok-4.3` |
 
 ## Remote / SSH
 
@@ -101,20 +101,38 @@ ssh -N -L 56121:127.0.0.1:56121 user@remote-host
 
 Run `/login` in your remote pi session, complete the browser flow locally. If 56121 is taken, the extension picks a random port and prints it.
 
+## X Search
+
+The `x_search` tool lets any model (not just Grok) search X (formerly Twitter). When the model calls `x_search`, pi-grok makes a separate request to xAI's API using your OAuth credentials. The search results come back as a visible tool call in pi's UI.
+
+Enabled by default. Disable with:
+
+```bash
+export PI_XAI_X_SEARCH=false
+```
+
+The model used for the internal search call defaults to `grok-4.3`. Change it with:
+
+```bash
+export PI_XAI_X_SEARCH_MODEL=grok-4.20-0309-reasoning
+```
+
 ## Architecture
 
 ```
 pi-grok/
-├── index.ts        # provider registration + event hooks
-├── oauth.ts        # PKCE flow, OIDC discovery, token refresh
-├── models.ts       # model definitions + live catalog from xAI
-├── sanitize.ts     # strips unsupported fields before each request
-├── errors.ts       # typed error classes
+├── index.ts           # provider registration + event hooks
+├── x-search-tool.ts   # x_search tool (separate xAI request)
+├── oauth.ts           # PKCE flow, OIDC discovery, token refresh
+├── models.ts          # model definitions + live catalog from xAI
+├── sanitize.ts        # strips unsupported fields before each request
+├── errors.ts          # typed error classes
 ├── package.json
 └── tsconfig.json
 ```
 
 - **Payload sanitization via `before_provider_request`** - decoupled from streaming, visible to other extensions, chainable.
+- **X Search tool** - proxy via `pi.registerTool`. Any model can search X. Per-query parameters supported.
 - **Live model catalog** - fetches `api.x.ai/v1/models` on login, merges with built-in list so new Grok releases appear without an extension update.
 - **Typed errors** - `XaiOAuthError` with machine-readable codes for distinguishing retryable vs fatal failures.
 - **Web Crypto** - `crypto.subtle` for PKCE.

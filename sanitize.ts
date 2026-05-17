@@ -18,21 +18,8 @@ import { supportsReasoningEffort } from "./models.js";
  * Sanitize a provider request payload for xAI's Responses API.
  *
  * Returns the modified payload.  Mutates the input in place for efficiency.
- *
- * Options:
- *   - enableXSearch: inject the server-side `x_search` tool into the tools array.
- *   - xSearchOptions: optional x_search parameters (allowed_x_handles, etc.).
  */
-export interface SanitizeOptions {
-	enableXSearch?: boolean;
-	xSearchOptions?: Record<string, unknown>;
-}
-
-export function sanitizePayload(
-	params: Record<string, unknown>,
-	modelId: string,
-	options?: SanitizeOptions,
-): Record<string, unknown> {
+export function sanitizePayload(params: Record<string, unknown>, modelId: string): Record<string, unknown> {
 	const next = params;
 
 	let strippedImages = false;
@@ -100,15 +87,6 @@ export function sanitizePayload(
 
 	// ── Strip unsupported fields ──────────────────────────────────────────
 	delete next.include;
-
-	// ── Inject server-side x_search tool ──────────────────────────────────
-	if (options?.enableXSearch) {
-		const tools = (next.tools as Array<Record<string, unknown>>) ?? [];
-		if (!tools.some((t) => t.type === "x_search")) {
-			tools.push({ type: "x_search", ...options.xSearchOptions });
-		}
-		next.tools = tools;
-	}
 
 	return next;
 }

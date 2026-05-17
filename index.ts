@@ -21,8 +21,9 @@ import {
 import * as oauth from "./oauth.js";
 import { type XaiOAuthCredentials, getBaseUrl } from "./oauth.js";
 import { resolveModels, type XaiModelConfig } from "./models.js";
-import { sanitizePayload, type SanitizeOptions } from "./sanitize.js";
+import { sanitizePayload } from "./sanitize.js";
 import { XaiOAuthError } from "./errors.js";
+import { registerXSearchTool } from "./x-search-tool.js";
 
 // ─── Stream function ─────────────────────────────────────────────────────────
 
@@ -96,25 +97,17 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	// ── Payload sanitization via event ────────────────────────────────────
-	const xSearchEnabled = (process.env.PI_XAI_X_SEARCH ?? "true").toLowerCase() !== "false";
-
-	let xSearchOptions: Record<string, unknown> | undefined;
-	try {
-		const raw = process.env.PI_XAI_X_SEARCH_OPTIONS;
-		if (raw) xSearchOptions = JSON.parse(raw);
-	} catch { /* ignore bad JSON */ }
-
-	const sanitizeOpts: SanitizeOptions = {
-		enableXSearch: xSearchEnabled,
-		xSearchOptions,
-	};
-
 	pi.on("before_provider_request", (event, ctx) => {
 		if (ctx.model?.provider !== "xai-oauth") return;
 
 		const modelId = ctx.model?.id ?? "";
-		return sanitizePayload(event.payload as Record<string, unknown>, modelId, sanitizeOpts);
+		return sanitizePayload(event.payload as Record<string, unknown>, modelId);
 	});
+
+	// ── X Search tool ─────────────────────────────────────────────────────
+	if ((process.env.PI_XAI_X_SEARCH ?? "true").toLowerCase() !== "false") {
+		registerXSearchTool(pi);
+	}
 
 	// ── /xai-status command ───────────────────────────────────────────────
 	pi.registerCommand("xai-status", {
