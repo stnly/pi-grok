@@ -67,13 +67,9 @@ function imageMimeTypeForPath(path: string): string {
 			return "image/jpeg";
 		case ".png":
 			return "image/png";
-		case ".webp":
-			return "image/webp";
-		case ".gif":
-			return "image/gif";
 		default:
 			throw new Error(
-				"xAI image understanding supports local .jpg, .jpeg, .png, .webp, and .gif files only",
+				"xAI image understanding supports local .jpg, .jpeg, and .png files only",
 			);
 	}
 }
