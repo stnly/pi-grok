@@ -22,11 +22,32 @@ export interface XaiModelConfig {
 	maxTokens: number;
 	/** Models that don't support reasoning.effort get a thinkingLevelMap. */
 	thinkingLevelMap?: Record<string, string | null>;
+	/** Override base URL for models only available on the CLI proxy. */
+	baseUrl?: string;
+	/** Extra headers to send with requests for this model. */
+	headers?: Record<string, string>;
 }
 
 // ─── Hardcoded fallback catalog ───────────────────────────────────────────────
 
+// CLI proxy base URL for models not available on the public API.
+const CLI_PROXY_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
+const CLI_PROXY_HEADERS: Record<string, string> = {
+	"x-grok-client-version": "0.2.22",
+};
+
 export const FALLBACK_MODELS: XaiModelConfig[] = [
+	{
+		id: "grok-composer-2.5-fast",
+		name: "Composer 2.5",
+		reasoning: true,
+		input: ["text", "image"],
+		cost: COST_BUILD,
+		contextWindow: 200_000,
+		maxTokens: 30_000,
+		baseUrl: CLI_PROXY_BASE_URL,
+		headers: CLI_PROXY_HEADERS,
+	},
 	{
 		id: "grok-build",
 		name: "Grok Build",
@@ -107,6 +128,8 @@ export function resolveModels(): XaiModelConfig[] {
 		cost: COST_BUILD,
 		contextWindow: 1_000_000,
 		maxTokens: 30_000,
+		baseUrl: undefined,
+		headers: undefined,
 	});
 }
 
@@ -131,7 +154,10 @@ export async function fetchLiveModels(
 ): Promise<XaiModelConfig[] | null> {
 	try {
 		const response = await fetch(`${baseUrl}/models`, {
-			headers: { Authorization: `Bearer ${accessToken}` },
+			headers: {
+				Authorization: `Bearer ${accessToken}`,
+				"x-grok-client-version": CLI_PROXY_HEADERS["x-grok-client-version"],
+			},
 			signal: AbortSignal.timeout(10_000),
 		});
 		if (!response.ok) return null;
@@ -163,6 +189,9 @@ export async function fetchLiveModels(
 					cost: COST_OVERRIDES[entry.id] ?? COST_420,
 					contextWindow: entry.context_length ?? 1_000_000,
 					maxTokens: entry.max_output_tokens ?? 30_000,
+					// Models only on the CLI proxy need its base URL + version header.
+					baseUrl: CLI_PROXY_BASE_URL,
+					headers: CLI_PROXY_HEADERS,
 				});
 			}
 		}

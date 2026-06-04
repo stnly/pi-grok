@@ -65,6 +65,8 @@ export default function (pi: ExtensionAPI) {
 			cost: m.cost,
 			contextWindow: m.contextWindow,
 			maxTokens: m.maxTokens,
+			...(m.baseUrl ? { baseUrl: m.baseUrl } : {}),
+			...(m.headers ? { headers: m.headers } : {}),
 		})),
 		oauth: {
 			name: "xAI (SuperGrok Subscription)",
@@ -88,7 +90,7 @@ export default function (pi: ExtensionAPI) {
 				).replace(/\/+$/, "");
 
 				return (models as Array<Record<string, unknown>>).map((m) =>
-					m.provider === "xai-oauth" ? { ...m, baseUrl: effectiveBaseUrl } : m,
+					m.provider === "xai-oauth" ? { ...m, baseUrl: m.baseUrl ?? effectiveBaseUrl } : m,
 				);
 			},
 		} as any,
