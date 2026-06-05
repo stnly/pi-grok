@@ -51,7 +51,7 @@ Choose **Use a subscription**, select **xAI (SuperGrok Subscription)**. Approve 
 
 ## Models
 
-- **grok-composer-2.5-fast** (Composer 2.5 — fast coding model, 200k context)
+- **grok-composer-2.5-fast**
 - **grok-build**
 - **grok-4.3**
 - **grok-4.20-0309-reasoning**
