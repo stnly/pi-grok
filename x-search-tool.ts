@@ -16,6 +16,7 @@ import { Type } from "typebox";
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 const SEARCH_MODEL = process.env.PI_XAI_X_SEARCH_MODEL ?? "grok-4.3";
+const CLIENT_VERSION = process.env.PI_XAI_CLIENT_VERSION ?? "0.2.22";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -60,6 +61,7 @@ async function callXSearch(
 		headers: {
 			"Content-Type": "application/json",
 			Authorization: `Bearer ${apiKey}`,
+			"x-grok-client-version": CLIENT_VERSION,
 		},
 		body: JSON.stringify(payload),
 		signal,
