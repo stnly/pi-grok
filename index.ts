@@ -54,7 +54,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerProvider("xai-oauth", {
 		name: "xAI (SuperGrok Subscription)",
 		baseUrl,
-		apiKey: "XAI_OAUTH_TOKEN",
+		apiKey: "$XAI_OAUTH_TOKEN",
 		api: "openai-responses",
 		models: models.map((m: XaiModelConfig) => ({
 			id: m.id,
