@@ -22,6 +22,25 @@ const CALLBACK_PORT = Number.parseInt(process.env.PI_XAI_OAUTH_CALLBACK_PORT || 
 const CALLBACK_PATH = "/callback";
 /** Refresh 120s before actual expiry. */
 const REFRESH_SKEW_MS = 120_000;
+/** Sync with package.json "version". Used in the OAuth token-endpoint User-Agent. */
+const PACKAGE_VERSION = "0.4.0";
+
+/**
+ * Headers for OAuth token-endpoint requests (authorize-code exchange + refresh).
+ *
+ * The token endpoint is the authorization server, not the API — so we identify
+ * with pi-grok's own product identity rather than impersonating grok-cli. xAI's
+ * auth server logs User-Agent; a missing UA is a hallmark of non-legitimate
+ * clients. API business requests are unaffected (those go through streamSimple
+ * with their own header set).
+ */
+function tokenHeaders(): Record<string, string> {
+	return {
+		"Content-Type": "application/x-www-form-urlencoded",
+		Accept: "application/json",
+		"User-Agent": `pi-grok/${PACKAGE_VERSION}`,
+	};
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -61,8 +80,21 @@ function base64Url(buffer: ArrayBuffer | Uint8Array): string {
 
 // ─── PKCE ─────────────────────────────────────────────────────────────────────
 
+// RFC 7636 §4.1 unreserved set. Using the spec's character set (rather than a
+// raw base64url blob) keeps the verifier spec-compliant and avoids any ambiguity
+// for authorization servers that validate verifier characters strictly.
+const PKCE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+const PKCE_VERIFIER_LENGTH = 64;
+
+function generateRandomString(length: number): string {
+	const bytes = crypto.getRandomValues(new Uint8Array(length));
+	let out = "";
+	for (let i = 0; i < length; i++) out += PKCE_CHARS[bytes[i] % PKCE_CHARS.length];
+	return out;
+}
+
 async function generatePKCE(): Promise<{ verifier: string; challenge: string }> {
-	const verifier = base64Url(crypto.getRandomValues(new Uint8Array(32)));
+	const verifier = generateRandomString(PKCE_VERIFIER_LENGTH);
 	const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
 	return { verifier, challenge: base64Url(hash) };
 }
@@ -165,6 +197,17 @@ function startCallbackServer(): Promise<{
 			}
 
 			const url = new URL(req.url ?? "/", `http://${CALLBACK_HOST}`);
+
+			// Allow the user to abort a pending login by visiting /cancel instead
+			// of waiting out the 180s callback timeout.
+			if (url.pathname === "/cancel") {
+				res.statusCode = 200;
+				res.setHeader("Content-Type", "text/html; charset=utf-8");
+				res.end("<html><body><h1>xAI login cancelled.</h1>You can close this tab.</body></html>");
+				settle?.({ error: "cancelled", errorDescription: "Login cancelled by user." });
+				return;
+			}
+
 			if (url.pathname !== CALLBACK_PATH) {
 				res.statusCode = 404;
 				res.end("Not found");
@@ -234,7 +277,7 @@ async function exchangeCode(
 ): Promise<XaiOAuthCredentials> {
 	const response = await fetch(tokenEndpoint, {
 		method: "POST",
-		headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+		headers: tokenHeaders(),
 		body: new URLSearchParams({
 			grant_type: "authorization_code",
 			client_id: CLIENT_ID,
@@ -359,7 +402,7 @@ export async function refresh(
 
 	const response = await fetch(tokenEndpoint, {
 		method: "POST",
-		headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+		headers: tokenHeaders(),
 		body: new URLSearchParams({
 			grant_type: "refresh_token",
 			client_id: CLIENT_ID,
