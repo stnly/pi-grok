@@ -14,7 +14,7 @@ Brings Grok models into pi using the official xAI OAuth 2.0 flow with PKCE. Your
 ## Install
 
 ```bash
-pi install git:github.com/stnly/pi-grok
+pi install git:github.com/stnly/pi-grok@v0.5.0
 ```
 
 ```
@@ -29,6 +29,12 @@ git clone https://github.com/stnly/pi-grok ~/.pi/agent/extensions/pi-grok
 
 ```
 /reload
+```
+
+## Uninstall
+
+```bash
+pi remove git:github.com/stnly/pi-grok
 ```
 
 ## Quick start
