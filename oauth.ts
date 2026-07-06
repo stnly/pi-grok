@@ -67,6 +67,35 @@ async function generatePKCE(): Promise<{ verifier: string; challenge: string }> 
 	return { verifier, challenge: base64Url(hash) };
 }
 
+// ─── Manual-paste parsing ────────────────────────────────────────────────────
+
+/**
+ * Parse a pasted redirect URL (or bare code) the user may have dropped into
+ * the manual-paste prompt. Accepts the full `http://127.0.0.1:PORT/callback?code=...&state=...`
+ * redirect, a `code=...&state=...` querystring, or just the raw code.
+ */
+function parseRedirectUrl(input: string): { code?: string; state?: string } {
+	const value = input.trim();
+	if (!value) return {};
+	try {
+		const url = new URL(value);
+		return {
+			code: url.searchParams.get("code") ?? undefined,
+			state: url.searchParams.get("state") ?? undefined,
+		};
+	} catch {
+		// not a URL — fall through
+	}
+	if (value.includes("code=")) {
+		const params = new URLSearchParams(value);
+		return {
+			code: params.get("code") ?? undefined,
+			state: params.get("state") ?? undefined,
+		};
+	}
+	return { code: value };
+}
+
 // ─── Endpoint validation ──────────────────────────────────────────────────────
 
 /**
@@ -334,30 +363,83 @@ export async function login(
 			instructions: `Authorize xAI, then return to pi. Callback listener: ${callback.redirectUri}`,
 		});
 
-		// pi wires a manual-code-input promise for callback-server providers.
-		// pi-grok doesn't use it, but it must be consumed — otherwise pi
-		// rejects it on cancel with no handler, crashing the process via
-		// uncaughtException. The built-in providers do the same.
-		callbacks.onManualCodeInput?.().catch(() => {});
+		// Optional manual-paste promise (races with the callback server).
+		// Consume it here so a user-initiated cancel (Escape) rejects the
+		// promise instead of becoming an unhandled rejection that crashes pi.
+		let manualCode: string | undefined;
+		let manualError: Error | undefined;
+		const manualPromise = callbacks.onManualCodeInput
+			? callbacks.onManualCodeInput()
+				.then((input) => {
+					manualCode = input;
+				})
+				.catch((err) => {
+					manualError = err instanceof Error ? err : new Error(String(err));
+				})
+			: undefined;
 
-		// Wait for the browser callback (180s timeout)
-		const result = await callback.waitForCallback(180_000, signal);
-		if (signal?.aborted) throw new Error("Login cancelled");
+		// First to settle wins. When no manual-paste promise is wired (the
+		// caller didn't supply onManualCodeInput), do NOT race against a
+		// resolved promise — that would settle before the callback fires and
+		// fall through to the state check with `result` still undefined.
+		let result: CallbackResult | undefined;
+		if (manualPromise) {
+			await Promise.race([
+				callback.waitForCallback(180_000, signal).then((r) => { result = r; }),
+				manualPromise,
+			]);
+		} else {
+			result = await callback.waitForCallback(180_000, signal);
+		}
 
-		// Validate
-		if (result.error) {
+		// Escape was pressed in the paste prompt — propagate the cancel.
+		if (manualError) {
+			throw manualError;
+		}
+
+		// Manual paste won the race before the callback server fired.
+		// State is checked only when the pasted value carried one — a bare
+		// code paste is the user explicitly opting out of the CSRF check,
+		// trusting PKCE + the one-time code binding instead.
+		if (!result && manualCode) {
+			const parsed = parseRedirectUrl(manualCode);
+			if (parsed.state && parsed.state !== state) {
+				throw new XaiOAuthError(
+					"xAI OAuth state mismatch — possible CSRF.",
+					XaiErrorCode.STATE_MISMATCH,
+				);
+			}
+			if (!parsed.code) {
+				throw new XaiOAuthError(
+					"xAI OAuth paste did not include an authorization code.",
+					XaiErrorCode.CODE_MISSING,
+				);
+			}
+			callbacks.onProgress?.("Exchanging authorization code for tokens...");
+			const credentials = await exchangeCode(
+				discovery.token_endpoint,
+				parsed.code,
+				callback.redirectUri,
+				verifier,
+			);
+			credentials.discovery = discovery;
+			return credentials;
+		}
+
+		// Validate browser-callback result
+		if (result?.error) {
 			throw new XaiOAuthError(
 				result.errorDescription ?? result.error,
 				XaiErrorCode.AUTHORIZATION_FAILED,
 			);
 		}
-		if (result.state !== state) {
+		if (result?.state !== state) {
 			throw new XaiOAuthError(
 				"xAI OAuth state mismatch — possible CSRF.",
 				XaiErrorCode.STATE_MISMATCH,
 			);
 		}
-		if (!result.code) {
+		if (!result?.code) {
 			throw new XaiOAuthError(
 				"xAI OAuth callback did not include an authorization code.",
 				XaiErrorCode.CODE_MISSING,
@@ -365,6 +447,7 @@ export async function login(
 		}
 
 		// Exchange code for tokens
+		callbacks.onProgress?.("Exchanging authorization code for tokens...");
 		const credentials = await exchangeCode(discovery.token_endpoint, result.code, callback.redirectUri, verifier);
 		credentials.discovery = discovery;
 		return credentials;
