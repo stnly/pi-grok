@@ -20,8 +20,8 @@ const SCOPE = process.env.PI_XAI_OAUTH_SCOPE || "openid profile email offline_ac
 const CALLBACK_HOST = process.env.PI_XAI_OAUTH_CALLBACK_HOST || "127.0.0.1";
 const CALLBACK_PORT = Number.parseInt(process.env.PI_XAI_OAUTH_CALLBACK_PORT || "56121", 10);
 const CALLBACK_PATH = "/callback";
-/** Refresh 120s before actual expiry. */
-const REFRESH_SKEW_MS = 120_000;
+/** Refresh 5 min before actual expiry. */
+const REFRESH_SKEW_MS = 5 * 60 * 1000;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
