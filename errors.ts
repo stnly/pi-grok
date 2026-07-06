@@ -31,6 +31,8 @@ export const XaiErrorCode = {
 	TOKEN_EXCHANGE_FAILED: "token_exchange_failed",
 	/** Token exchange returned an invalid payload. */
 	TOKEN_EXCHANGE_INVALID: "token_exchange_invalid",
+	/** Returned id_token failed validation (bad JWT, nonce mismatch). */
+	ID_TOKEN_INVALID: "id_token_invalid",
 	/** Refresh token is missing or empty. */
 	REFRESH_MISSING: "refresh_missing",
 	/** Token refresh failed (expired, revoked). */

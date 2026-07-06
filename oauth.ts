@@ -276,6 +276,105 @@ function startCallbackServer(): Promise<{
 	})();
 }
 
+// ─── JWT / id_token validation ──────────────────────────────────────────────
+
+interface IdTokenClaims {
+	iss?: string;
+	aud?: string | string[];
+	sub?: string;
+	nonce?: string;
+	exp?: number;
+}
+
+/**
+ * Decode a JWT payload without verifying its signature.
+ *
+ * We do NOT validate the JWT signature here because pi-grok has no
+ * out-of-band channel to fetch xAI's rotating JWKS keys at the moment we
+ * need them. The checks we *do* apply (iss, aud, nonce, exp) still close
+ * the practical token-injection vectors for an OAuth code flow on a
+ * loopback redirect. Signature verification would be a future hardening
+ * step requiring a JWKS fetch + cache.
+ */
+function decodeIdToken(token: string): IdTokenClaims | null {
+	const parts = token.split(".");
+	if (parts.length !== 3) return null;
+	try {
+		// JWT payload is base64url without padding.
+		const b64 = parts[1]!.replace(/-/g, "+").replace(/_/g, "/");
+		const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+		const json = atob(padded);
+		return JSON.parse(json) as IdTokenClaims;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Validate the id_token returned in the token exchange.
+ *
+ * - `iss` must be the xAI issuer (or a sub-path of it).
+ * - `aud` must contain our client_id.
+ * - `nonce`, if present, must match the one sent in the authorize request.
+ *   (Checked conditionally so a provider that omits the claim does not fail;
+ *   PKCE plus the one-time code still bind the exchange.)
+ * - `exp`, if present, must be in the future (30s clock skew allowed).
+ *
+ * Returns silently on success; throws `ID_TOKEN_INVALID` on any mismatch.
+ * If no id_token is present, this is a no-op (the provider may legitimately
+ * omit it).
+ */
+function validateIdToken(idToken: string, expectedNonce: string): void {
+	const claims = decodeIdToken(idToken);
+	if (!claims) {
+		throw new XaiOAuthError(
+			"xAI token exchange returned an unparseable id_token.",
+			XaiErrorCode.ID_TOKEN_INVALID,
+		);
+	}
+
+	// Issuer check: must be https://auth.x.ai or *.x.ai.
+	const iss = typeof claims.iss === "string" ? claims.iss : "";
+	try {
+		const issUrl = new URL(iss);
+		const host = issUrl.hostname.toLowerCase();
+		if (issUrl.protocol !== "https:" || (!host.endsWith(".x.ai") && host !== "x.ai")) {
+			throw 0; // triggers the catch below
+		}
+	} catch {
+		throw new XaiOAuthError(
+			`xAI id_token has unexpected issuer: ${iss}`,
+			XaiErrorCode.ID_TOKEN_INVALID,
+		);
+	}
+
+	// Audience must include our client_id.
+	const aud = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
+	if (!aud.some((a) => a === CLIENT_ID)) {
+		throw new XaiOAuthError(
+			"xAI id_token audience does not include our client_id.",
+			XaiErrorCode.ID_TOKEN_INVALID,
+		);
+	}
+
+	// If a nonce claim is present, it must match the one we sent. Not all
+	// providers return nonce; when absent, PKCE + one-time code still bind.
+	if (typeof claims.nonce === "string" && claims.nonce !== expectedNonce) {
+		throw new XaiOAuthError(
+			"xAI id_token nonce mismatch — possible token injection.",
+			XaiErrorCode.ID_TOKEN_INVALID,
+		);
+	}
+
+	// If exp is present, it must be in the future (30s clock skew allowed).
+	if (typeof claims.exp === "number" && claims.exp * 1000 < Date.now() - 30_000) {
+		throw new XaiOAuthError(
+			"xAI id_token has expired.",
+			XaiErrorCode.ID_TOKEN_INVALID,
+		);
+	}
+}
+
 // ─── Token exchange ───────────────────────────────────────────────────────────
 
 async function exchangeCode(
@@ -283,6 +382,7 @@ async function exchangeCode(
 	code: string,
 	redirectUri: string,
 	verifier: string,
+	expectedNonce: string,
 ): Promise<XaiOAuthCredentials> {
 	const response = await fetch(tokenEndpoint, {
 		method: "POST",
@@ -317,13 +417,17 @@ async function exchangeCode(
 		);
 	}
 	const expiresIn = typeof payload.expires_in === "number" ? payload.expires_in : Number(payload.expires_in ?? 3600);
+	const idToken = String(payload.id_token ?? "");
+	if (idToken) {
+		validateIdToken(idToken, expectedNonce);
+	}
 	return {
 		access,
 		refresh,
 		expires: Date.now() + expiresIn * 1000 - REFRESH_SKEW_MS,
 		tokenEndpoint,
 		discovery: { authorization_endpoint: "", token_endpoint: tokenEndpoint },
-		idToken: String(payload.id_token ?? ""),
+		idToken,
 		tokenType: String(payload.token_type ?? "Bearer"),
 		baseUrl: getBaseUrl(),
 	};
@@ -421,6 +525,7 @@ export async function login(
 				parsed.code,
 				callback.redirectUri,
 				verifier,
+				nonce,
 			);
 			credentials.discovery = discovery;
 			return credentials;
@@ -448,7 +553,13 @@ export async function login(
 
 		// Exchange code for tokens
 		callbacks.onProgress?.("Exchanging authorization code for tokens...");
-		const credentials = await exchangeCode(discovery.token_endpoint, result.code, callback.redirectUri, verifier);
+		const credentials = await exchangeCode(
+			discovery.token_endpoint,
+			result.code,
+			callback.redirectUri,
+			verifier,
+			nonce,
+		);
 		credentials.discovery = discovery;
 		return credentials;
 	} finally {
