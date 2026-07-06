@@ -1,6 +1,6 @@
 {
   "name": "pi-grok",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Use your SuperGrok subscription in pi with OAuth login, auto-refresh, and live model discovery",
   "keywords": [
     "pi-package",
