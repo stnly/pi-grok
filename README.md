@@ -68,7 +68,7 @@ export PI_XAI_OAUTH_MODELS="grok-build,grok-4.3"
 
 pi starts a local HTTP server on `127.0.0.1:56121` and generates a PKCE challenge. Your browser opens to xAI's authorization page. You approve access. xAI redirects back with an auth code, which pi exchanges for access and refresh tokens.
 
-Tokens refresh 2 minutes before they expire. You stay logged in until you revoke access. Credentials are stored locally and never leave your machine.
+Tokens refresh 5 minutes before they expire. You stay logged in until you revoke access. Credentials are stored locally and never leave your machine.
 
 Requests go through xAI's Responses API. Tool calling, streaming, and reasoning all work.
 
@@ -101,6 +101,8 @@ ssh -N -L 56121:127.0.0.1:56121 user@remote-host
 ```
 
 Run `/login` in your remote pi session, complete the browser flow locally. If 56121 is taken, the extension picks a random port and prints it.
+
+If the callback port can't be forwarded (e.g. the random fallback above, or the browser is on a machine you can't tunnel to), pi-grok also shows a paste prompt — complete the login in the browser, then paste the final `http://127.0.0.1:.../callback?code=...` redirect URL back into pi.
 
 ## X Search
 
