@@ -192,9 +192,10 @@ function startCallbackServer(): Promise<{
 	});
 
 	const listen = (port: number) => new Promise<number>((resolve, reject) => {
-		server.once("error", reject);
+		const onError = (err: NodeJS.ErrnoException) => reject(err);
+		server.once("error", onError);
 		server.listen(port, CALLBACK_HOST, () => {
-			server.removeListener("error", reject);
+			server.removeListener("error", onError);
 			const addr = server.address();
 			resolve(typeof addr === "object" && addr ? addr.port : port);
 		});
@@ -207,6 +208,16 @@ function startCallbackServer(): Promise<{
 		} catch {
 			actualPort = await listen(0); // OS-assigned port
 		}
+		// Keep a permanent error listener so a late server error (port clash
+		// from a second login, socket exhaustion, etc.) doesn't crash the
+		// process via an unhandled `error` event. Resolve the callback promise
+		// so any pending `waitForCallback` unblocks instead of hanging.
+		server.on("error", (err) => {
+			settle?.({
+				error: "server_error",
+				errorDescription: err instanceof Error ? err.message : String(err),
+			});
+		});
 		const redirectUri = `http://${CALLBACK_HOST}:${actualPort}${CALLBACK_PATH}`;
 		return {
 			server,
