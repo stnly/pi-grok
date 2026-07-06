@@ -142,7 +142,7 @@ interface CallbackResult {
 function startCallbackServer(): Promise<{
 	server: import("node:http").Server;
 	redirectUri: string;
-	waitForCallback: (timeoutMs: number) => Promise<CallbackResult>;
+	waitForCallback: (timeoutMs: number, signal?: AbortSignal) => Promise<CallbackResult>;
 }> {
 	let settle: ((value: CallbackResult) => void) | undefined;
 	const callbackPromise = new Promise<CallbackResult>((resolve) => { settle = resolve; });
@@ -211,15 +211,27 @@ function startCallbackServer(): Promise<{
 		return {
 			server,
 			redirectUri,
-			waitForCallback: (timeoutMs: number) => Promise.race([
-				callbackPromise,
-				new Promise<CallbackResult>((resolve) =>
-					setTimeout(
-						() => resolve({ error: "timeout", errorDescription: "Timed out waiting for xAI OAuth callback." }),
-						timeoutMs,
+			waitForCallback: (timeoutMs: number, signal?: AbortSignal) => {
+				const branches: Promise<CallbackResult>[] = [
+					callbackPromise,
+					new Promise<CallbackResult>((resolve) =>
+						setTimeout(
+							() => resolve({ error: "timeout", errorDescription: "Timed out waiting for xAI OAuth callback." }),
+							timeoutMs,
+						),
 					),
-				),
-			]),
+				];
+				if (signal) {
+					branches.push(
+						signal.aborted
+							? Promise.resolve({ error: "aborted", errorDescription: "Login cancelled" })
+							: new Promise<CallbackResult>((resolve) =>
+								signal.addEventListener("abort", () => resolve({ error: "aborted", errorDescription: "Login cancelled" }), { once: true }),
+							),
+					);
+				}
+				return Promise.race(branches);
+			},
 		};
 	})();
 }
@@ -282,6 +294,9 @@ async function exchangeCode(
 export async function login(
 	callbacks: import("@earendil-works/pi-ai").OAuthLoginCallbacks,
 ): Promise<import("@earendil-works/pi-ai").OAuthCredentials> {
+	const { signal } = callbacks;
+	if (signal?.aborted) throw new Error("Login cancelled");
+
 	const discovery = await discover();
 	const { verifier, challenge } = await generatePKCE();
 	const state = base64Url(crypto.getRandomValues(new Uint8Array(16)));
@@ -308,8 +323,15 @@ export async function login(
 			instructions: `Authorize xAI, then return to pi. Callback listener: ${callback.redirectUri}`,
 		});
 
+		// pi wires a manual-code-input promise for callback-server providers.
+		// pi-grok doesn't use it, but it must be consumed — otherwise pi
+		// rejects it on cancel with no handler, crashing the process via
+		// uncaughtException. The built-in providers do the same.
+		callbacks.onManualCodeInput?.().catch(() => {});
+
 		// Wait for the browser callback (180s timeout)
-		const result = await callback.waitForCallback(180_000);
+		const result = await callback.waitForCallback(180_000, signal);
+		if (signal?.aborted) throw new Error("Login cancelled");
 
 		// Validate
 		if (result.error) {
