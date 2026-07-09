@@ -9,6 +9,8 @@
 const COST_BUILD = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 const COST_43 = { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 };
 const COST_420 = { input: 2, output: 6, cacheRead: 0.2, cacheWrite: 0 };
+// grok-4.5: cached input is $0.50/M (higher than the $0.20 used by 4.20/4.3).
+export const COST_45 = { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 };
 
 // ─── Model type ───────────────────────────────────────────────────────────────
 
@@ -58,6 +60,15 @@ export const FALLBACK_MODELS: XaiModelConfig[] = [
 		maxTokens: 30_000,
 	},
 	{
+		id: "grok-4.5",
+		name: "Grok 4.5",
+		reasoning: true,
+		input: ["text", "image"],
+		cost: COST_45,
+		contextWindow: 500_000,
+		maxTokens: 30_000,
+	},
+	{
 		id: "grok-4.3",
 		name: "Grok 4.3",
 		reasoning: true,
@@ -102,7 +113,7 @@ export const FALLBACK_MODELS: XaiModelConfig[] = [
  * Only these model prefixes support `reasoning.effort` in the Responses API.
  * Everything else gets the param stripped in the sanitizer.
  */
-const EFFORT_CAPABLE_PREFIXES = ["grok-3-mini", "grok-4.20-multi-agent", "grok-4.3"];
+const EFFORT_CAPABLE_PREFIXES = ["grok-3-mini", "grok-4.20-multi-agent", "grok-4.3", "grok-4.5"];
 
 export function supportsReasoningEffort(modelId: string): boolean {
 	const name = modelId.includes("/") ? modelId.split("/").pop()! : modelId;
@@ -146,6 +157,7 @@ interface ApiModelEntry {
 const COST_OVERRIDES: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
 	"grok-build": COST_BUILD,
 	"grok-4.3": COST_43,
+	"grok-4.5": COST_45,
 };
 
 export async function fetchLiveModels(
