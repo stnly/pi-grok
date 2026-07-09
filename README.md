@@ -71,7 +71,12 @@ appear without an extension update. The first model load after login uses the
 fallback list; the catalog populates in the background and the next `/reload`
 surfaces discovered models. If the fetch fails, the fallback list is used.
 
-Filter or reorder with `PI_XAI_OAUTH_MODELS`:
+Both xAI endpoints stay in play: public-API models (and newly discovered ids
+from `/models`) use `api.x.ai`; subscription-only models like Composer keep
+the CLI chat proxy.
+
+Filter or reorder with `PI_XAI_OAUTH_MODELS`. The filter is re-applied after
+live discovery, so it still holds when new catalog ids arrive:
 
 ```bash
 export PI_XAI_OAUTH_MODELS="grok-build,grok-4.5"
