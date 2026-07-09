@@ -103,7 +103,7 @@ Shows your login state and available models.
 | `PI_XAI_OAUTH_CLIENT_ID` | built-in |
 | `XAI_OAUTH_TOKEN` | skip OAuth, use raw token (no refresh, no discovery) |
 | `PI_XAI_X_SEARCH` | `true` |
-| `PI_XAI_X_SEARCH_MODEL` | `grok-4.3` |
+| `PI_XAI_X_SEARCH_MODEL` | `grok-4.5` |
 
 ## Remote / SSH
 
@@ -127,7 +127,7 @@ Enabled by default. Disable with:
 export PI_XAI_X_SEARCH=false
 ```
 
-The model used for the internal search call defaults to `grok-4.3`. Change it with:
+The model used for the internal search call defaults to `grok-4.5`. Change it with:
 
 ```bash
 export PI_XAI_X_SEARCH_MODEL=grok-4.20-0309-reasoning
