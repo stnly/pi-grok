@@ -12,6 +12,11 @@
   ],
   "type": "module",
   "main": "index.ts",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
   "pi": {
     "extensions": [
       "./index.ts"
@@ -28,6 +33,7 @@
     "url": "https://github.com/stnly/pi-grok.git"
   },
   "devDependencies": {
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
   }
 }
