@@ -14,7 +14,7 @@ Brings Grok models into pi using the official xAI OAuth 2.0 flow with PKCE. Your
 ## Install
 
 ```bash
-pi install git:github.com/stnly/pi-grok@v0.5.0
+pi install git:github.com/stnly/pi-grok@v0.6.0
 ```
 
 ```
@@ -50,24 +50,31 @@ Choose **Use a subscription**, select **xAI (SuperGrok Subscription)**. Approve 
 **2. Pick a model**
 
 ```
-/model xai-oauth/grok-4.3
+/model xai-oauth/grok-4.5
 ```
 
 `Ctrl+P` cycles models.
 
 ## Models
 
+- **grok-4.5**
+- **grok-4.3**
 - **grok-composer-2.5-fast**
 - **grok-build**
-- **grok-4.3**
 - **grok-4.20-0309-reasoning**
 - **grok-4.20-0309-non-reasoning**
 - **grok-4.20-multi-agent-0309**
 
+This is the built-in fallback list. On login, pi-grok also fetches
+`api.x.ai/v1/models` and merges the live catalog in, so new Grok releases
+appear without an extension update. The first model load after login uses the
+fallback list; the catalog populates in the background and the next `/reload`
+surfaces discovered models. If the fetch fails, the fallback list is used.
+
 Filter or reorder with `PI_XAI_OAUTH_MODELS`:
 
 ```bash
-export PI_XAI_OAUTH_MODELS="grok-build,grok-4.3"
+export PI_XAI_OAUTH_MODELS="grok-build,grok-4.5"
 ```
 
 ## How it works
