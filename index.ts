@@ -22,7 +22,7 @@ import * as oauth from "./oauth.js";
 import { type XaiOAuthCredentials, getBaseUrl } from "./oauth.js";
 import {
 	resolveModels,
-	mergeDiscoveredModels,
+	rebuildModelsForOAuth,
 	triggerDiscovery,
 	type XaiModelConfig,
 } from "./models.js";
@@ -98,20 +98,12 @@ export default function (pi: ExtensionAPI) {
 				// the next model load picks up discovered models.
 				if (creds.access) triggerDiscovery(creds.access, effectiveBaseUrl);
 
-				const all = models as Array<Record<string, unknown>>;
-				// Extract our provider's models, merge the discovered catalog into
-				// them, then write them back over the full list.
-				const ours = all.filter((m) => m.provider === "xai-oauth");
-				const merged: XaiModelConfig[] = mergeDiscoveredModels(
-					ours as unknown as XaiModelConfig[],
-				).map((m: XaiModelConfig) => ({
-					...m,
-					baseUrl: m.baseUrl ?? effectiveBaseUrl,
-				}));
-				const mergedById = new Map(merged.map((m) => [m.id, m]));
-
-				return all.map((m) =>
-					m.provider === "xai-oauth" ? (mergedById.get(m.id as string) ?? m) : m,
+				// Full rebuild: append discovered ids, re-apply PI_XAI_OAUTH_MODELS,
+				// stamp api/provider, keep CLI-proxy baseUrls and fill public ones.
+				return rebuildModelsForOAuth(
+					models as Array<Record<string, unknown>>,
+					"xai-oauth",
+					effectiveBaseUrl,
 				);
 			},
 		} as any,

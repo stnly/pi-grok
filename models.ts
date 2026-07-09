@@ -122,16 +122,21 @@ export function supportsReasoningEffort(modelId: string): boolean {
 
 // ─── PI_XAI_OAUTH_MODELS env override ────────────────────────────────────────
 
-/**
- * Resolve the active model list.  If `PI_XAI_OAUTH_MODELS` is set,
- * it filters/reorders the fallback list; unknown IDs get sensible defaults.
- */
-export function resolveModels(): XaiModelConfig[] {
-	const env = (process.env.PI_XAI_OAUTH_MODELS || "").split(",").map((s) => s.trim()).filter(Boolean);
-	if (env.length === 0) return FALLBACK_MODELS;
+/** Parse `PI_XAI_OAUTH_MODELS` into a list of model ids (empty = no filter). */
+export function envModelIds(): string[] {
+	return (process.env.PI_XAI_OAUTH_MODELS || "").split(",").map((s) => s.trim()).filter(Boolean);
+}
 
-	const byId = new Map(FALLBACK_MODELS.map((m) => [m.id, m]));
-	return env.map((id) => byId.get(id) ?? {
+/**
+ * Filter/reorder `models` by an explicit id list.
+ * Unknown ids get sensible defaults so env can pre-declare models not yet
+ * in the fallback catalog. Empty `envIds` returns `models` unchanged.
+ */
+export function filterModelsByEnv(models: XaiModelConfig[], envIds: string[]): XaiModelConfig[] {
+	if (envIds.length === 0) return models;
+
+	const byId = new Map(models.map((m) => [m.id, m]));
+	return envIds.map((id) => byId.get(id) ?? {
 		id,
 		name: id,
 		reasoning: true,
@@ -142,6 +147,14 @@ export function resolveModels(): XaiModelConfig[] {
 		baseUrl: undefined,
 		headers: undefined,
 	});
+}
+
+/**
+ * Resolve the active model list. If `PI_XAI_OAUTH_MODELS` is set,
+ * it filters/reorders the fallback list; unknown IDs get sensible defaults.
+ */
+export function resolveModels(): XaiModelConfig[] {
+	return filterModelsByEnv(FALLBACK_MODELS, envModelIds());
 }
 
 // ─── Live catalog ────────────────────────────────────────────────────────────
@@ -190,9 +203,12 @@ function isChatModelEntry(id: string): boolean {
  * does not expose (display name, pricing via COST_OVERRIDES, reasoning flag,
  * routing) and supplies any ids the live response omits.
  *
- * Routing: a discovered id is only sent to the CLI proxy when it is absent
- * from the hardcoded list AND has no pricing override. Known families
- * (grok-4.3, grok-4.5, ...) ride the provider's base URL.
+ * Routing: both xAI endpoints stay in play.
+ * - Hardcoded entries keep their own baseUrl (CLI proxy for composer-class
+ *   models, provider base URL for public-API models).
+ * - Newly discovered ids come from the public `/models` endpoint, so they
+ *   ride the provider base URL (no CLI proxy override). CLI-proxy-only
+ *   models that the live response omits stay available via the base list.
  */
 export function mergeLiveModels(
 	base: XaiModelConfig[],
@@ -217,7 +233,7 @@ export function mergeLiveModels(
 				maxTokens: entry.max_output_tokens ?? existing.maxTokens,
 			});
 		} else {
-			const hasCostOverride = entry.id in COST_OVERRIDES;
+			// Discovered via public /models → public API. No CLI proxy override.
 			merged.push({
 				id: entry.id,
 				name: entry.id,
@@ -226,13 +242,11 @@ export function mergeLiveModels(
 				cost: COST_OVERRIDES[entry.id] ?? COST_420,
 				contextWindow: entry.context_length ?? 1_000_000,
 				maxTokens: entry.max_output_tokens ?? 30_000,
-				baseUrl: hasCostOverride ? undefined : CLI_PROXY_BASE_URL,
-				headers: hasCostOverride ? undefined : CLI_PROXY_HEADERS,
 			});
 		}
 	}
 
-	// Append hardcoded models the live response omitted.
+	// Append hardcoded models the live response omitted (keeps CLI-proxy entries).
 	for (const fb of base) {
 		if (!seen.has(fb.id)) merged.push(fb);
 	}
@@ -291,6 +305,21 @@ export function mergeDiscoveredModels(base: XaiModelConfig[]): XaiModelConfig[] 
 }
 
 /**
+ * Merge live discovery into the provider's models, then re-apply
+ * `PI_XAI_OAUTH_MODELS` so the env filter still holds after new ids land.
+ *
+ * Pure aside from reading the module-level discovery cache (and env, unless
+ * `envIds` is passed). Returns only this provider's models; the caller
+ * recombines them with other providers and stamps Model fields.
+ */
+export function applyDiscoveredModels(
+	providerModels: XaiModelConfig[],
+	envIds: string[] = envModelIds(),
+): XaiModelConfig[] {
+	return filterModelsByEnv(mergeDiscoveredModels(providerModels), envIds);
+}
+
+/**
  * Fire-and-forget a live catalog fetch. Deduplicates concurrent calls so
  * repeated `/reload`s don't stack requests. Errors are swallowed (the cache
  * stays empty and the fallback list is used).
@@ -302,4 +331,47 @@ export function triggerDiscovery(accessToken: string, baseUrl: string): void {
 		if (body && Array.isArray(body.data)) discoveredBody = body;
 		discoveryInFlight = null;
 	})();
+}
+
+/** Clear the discovery cache. For tests only. */
+export function resetDiscoveryForTests(): void {
+	discoveredBody = null;
+	discoveryInFlight = null;
+}
+
+/**
+ * Rebuild the full model list for `modifyModels`.
+ *
+ * - Keeps non-provider models untouched
+ * - Merges live discovery into this provider's models
+ * - Re-applies `PI_XAI_OAUTH_MODELS`
+ * - Appends newly discovered ids (map-only rewrites drop them)
+ * - Stamps `api` / `provider` on entries that lack them
+ * - Fills `baseUrl` from the provider default when unset (public API path);
+ *   CLI-proxy models already carry their own baseUrl and keep it
+ */
+export function rebuildModelsForOAuth(
+	allModels: Array<Record<string, unknown>>,
+	provider: string,
+	effectiveBaseUrl: string,
+	envIds: string[] = envModelIds(),
+): Array<Record<string, unknown>> {
+	const others = allModels.filter((m) => m.provider !== provider);
+	const ours = allModels.filter((m) => m.provider === provider);
+	const template = ours[0];
+
+	const merged = applyDiscoveredModels(
+		ours as unknown as XaiModelConfig[],
+		envIds,
+	).map((m) => {
+		const row = m as XaiModelConfig & { api?: string; provider?: string };
+		return {
+			...row,
+			api: row.api ?? (template?.api as string | undefined) ?? "openai-responses",
+			provider: row.provider ?? provider,
+			baseUrl: row.baseUrl ?? effectiveBaseUrl,
+		};
+	});
+
+	return [...others, ...merged];
 }
