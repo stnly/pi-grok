@@ -20,7 +20,12 @@ import {
 } from "@earendil-works/pi-ai";
 import * as oauth from "./oauth.js";
 import { type XaiOAuthCredentials, getBaseUrl } from "./oauth.js";
-import { resolveModels, type XaiModelConfig } from "./models.js";
+import {
+	resolveModels,
+	mergeDiscoveredModels,
+	triggerDiscovery,
+	type XaiModelConfig,
+} from "./models.js";
 import { sanitizePayload } from "./sanitize.js";
 import { XaiOAuthError } from "./errors.js";
 import { registerXSearchTool } from "./x-search-tool.js";
@@ -85,12 +90,28 @@ export default function (pi: ExtensionAPI) {
 			},
 
 			modifyModels(models: unknown, credentials: unknown) {
-				const effectiveBaseUrl = String(
-					(credentials as XaiOAuthCredentials).baseUrl ?? getBaseUrl(),
-				).replace(/\/+$/, "");
+				const creds = credentials as XaiOAuthCredentials;
+				const effectiveBaseUrl = String(creds.baseUrl ?? getBaseUrl()).replace(/\/+$/, "");
 
-				return (models as Array<Record<string, unknown>>).map((m) =>
-					m.provider === "xai-oauth" ? { ...m, baseUrl: m.baseUrl ?? effectiveBaseUrl } : m,
+				// Kick off a background live-catalog fetch. modifyModels runs
+				// synchronously, so the cache populates after this call returns;
+				// the next model load picks up discovered models.
+				if (creds.access) triggerDiscovery(creds.access, effectiveBaseUrl);
+
+				const all = models as Array<Record<string, unknown>>;
+				// Extract our provider's models, merge the discovered catalog into
+				// them, then write them back over the full list.
+				const ours = all.filter((m) => m.provider === "xai-oauth");
+				const merged: XaiModelConfig[] = mergeDiscoveredModels(
+					ours as unknown as XaiModelConfig[],
+				).map((m: XaiModelConfig) => ({
+					...m,
+					baseUrl: m.baseUrl ?? effectiveBaseUrl,
+				}));
+				const mergedById = new Map(merged.map((m) => [m.id, m]));
+
+				return all.map((m) =>
+					m.provider === "xai-oauth" ? (mergedById.get(m.id as string) ?? m) : m,
 				);
 			},
 		} as any,
