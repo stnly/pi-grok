@@ -15,7 +15,7 @@ import { Type } from "typebox";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
-const SEARCH_MODEL = process.env.PI_XAI_X_SEARCH_MODEL ?? "grok-4.3";
+const SEARCH_MODEL = process.env.PI_XAI_X_SEARCH_MODEL ?? "grok-4.5";
 const CLIENT_VERSION = process.env.PI_XAI_CLIENT_VERSION ?? "0.2.22";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
