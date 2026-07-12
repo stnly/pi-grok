@@ -200,19 +200,20 @@ function isChatModelEntry(id: string): boolean {
  * The live catalog is authoritative when present: its `context_length` and
  * `max_output_tokens` override the hardcoded values, and the merged list is
  * ordered by the live response. The hardcoded list fills the gaps the API
- * does not expose (display name, pricing via COST_OVERRIDES, reasoning flag,
- * routing) and supplies any ids the live response omits.
+ * does not expose (display name, pricing via COST_OVERRIDES, reasoning flag).
  *
- * Routing: both xAI endpoints stay in play.
- * - Hardcoded entries keep their own baseUrl (CLI proxy for composer-class
- *   models, provider base URL for public-API models).
- * - Newly discovered ids come from the public `/models` endpoint, so they
- *   ride the provider base URL (no CLI proxy override). CLI-proxy-only
- *   models that the live response omits stay available via the base list.
+ * Routing is proxy-preferred. `proxyIds` is the set of model ids the CLI
+ * proxy catalog reported as available; any id in that set gets the proxy base
+ * URL and version header, so requests ride the subscription path instead of
+ * the billed public API. ids absent from the proxy set fall back to the
+ * provider base URL. Omitting `proxyIds` (older callers) keeps public-API
+ * routing, so hardcoded proxy-only entries (composer) still carry their own
+ * baseUrl from the base list.
  */
 export function mergeLiveModels(
 	base: XaiModelConfig[],
 	body: { data?: ApiModelEntry[] } | null,
+	proxyIds: Set<string> = new Set(),
 ): XaiModelConfig[] {
 	if (!body || !Array.isArray(body.data)) return base;
 
@@ -222,18 +223,24 @@ export function mergeLiveModels(
 	const seen = new Set<string>();
 	const merged: XaiModelConfig[] = [];
 
+	const routeFor = (id: string): { baseUrl?: string; headers?: Record<string, string> } =>
+		proxyIds.has(id)
+			? { baseUrl: CLI_PROXY_BASE_URL, headers: CLI_PROXY_HEADERS }
+			: {};
+
 	for (const entry of grokEntries) {
 		seen.add(entry.id);
 		const existing = baseById.get(entry.id);
 		if (existing) {
-			// Live fields override; base fills name/cost/reasoning/routing.
+			// Live fields override; base fills name/cost/reasoning. Proxy routing
+			// wins over whatever the base entry carried.
 			merged.push({
 				...existing,
 				contextWindow: entry.context_length ?? existing.contextWindow,
 				maxTokens: entry.max_output_tokens ?? existing.maxTokens,
+				...routeFor(entry.id),
 			});
 		} else {
-			// Discovered via public /models → public API. No CLI proxy override.
 			merged.push({
 				id: entry.id,
 				name: entry.id,
@@ -242,13 +249,17 @@ export function mergeLiveModels(
 				cost: COST_OVERRIDES[entry.id] ?? COST_420,
 				contextWindow: entry.context_length ?? 1_000_000,
 				maxTokens: entry.max_output_tokens ?? 30_000,
+				...routeFor(entry.id),
 			});
 		}
 	}
 
-	// Append hardcoded models the live response omitted (keeps CLI-proxy entries).
+	// Append hardcoded models the live response omitted, applying proxy routing
+	// so a model that joins the proxy catalog later moves to the proxy path.
 	for (const fb of base) {
-		if (!seen.has(fb.id)) merged.push(fb);
+		if (!seen.has(fb.id)) {
+			merged.push({ ...fb, ...routeFor(fb.id) });
+		}
 	}
 
 	return merged;
@@ -259,9 +270,10 @@ export function mergeLiveModels(
 export async function fetchLiveModels(
 	accessToken: string,
 	baseUrl: string,
+	proxyIds: Set<string> = new Set(),
 ): Promise<XaiModelConfig[] | null> {
 	const body = await fetchLiveCatalog(accessToken, baseUrl);
-	return body ? mergeLiveModels(FALLBACK_MODELS, body) : null;
+	return body ? mergeLiveModels(FALLBACK_MODELS, body, proxyIds) : null;
 }
 
 /** Fetch and return the raw `/models` body, or null on any failure. */
@@ -287,13 +299,16 @@ async function fetchLiveCatalog(
 // ─── Discovery cache ─────────────────────────────────────────────────────────
 
 /**
- * Raw `/models` body from the last successful live fetch.
+ * Raw `/models` body from the last successful live fetch, plus the set of
+ * ids the CLI proxy catalog reported as available.
  *
  * Storing the raw body (rather than pre-merged configs) keeps the cache
  * decoupled from the fallback list, so a future `FALLBACK_MODELS` update
- * changes how the cache re-merges without a refetch.
+ * changes how the cache re-merges without a refetch. The proxy id set drives
+ * proxy-preferred routing at merge time.
  */
 let discoveredBody: { data?: ApiModelEntry[] } | null = null;
+let discoveredProxyIds: Set<string> = new Set();
 let discoveryInFlight: Promise<void> | null = null;
 
 /**
@@ -301,7 +316,7 @@ let discoveryInFlight: Promise<void> | null = null;
  * when no successful fetch has completed, so callers always get a usable list.
  */
 export function mergeDiscoveredModels(base: XaiModelConfig[]): XaiModelConfig[] {
-	return discoveredBody ? mergeLiveModels(base, discoveredBody) : base;
+	return discoveredBody ? mergeLiveModels(base, discoveredBody, discoveredProxyIds) : base;
 }
 
 /**
@@ -320,15 +335,29 @@ export function applyDiscoveredModels(
 }
 
 /**
- * Fire-and-forget a live catalog fetch. Deduplicates concurrent calls so
- * repeated `/reload`s don't stack requests. Errors are swallowed (the cache
- * stays empty and the fallback list is used).
+ * Fire-and-forget live catalog fetches for both endpoints.
+ *
+ * Fetches the public `/models` catalog (the source of discovered ids and the
+ * authoritative context window / max-token fields) and the CLI proxy catalog
+ * (the source of routing: ids present here ride the subscription path).
+ *
+ * Deduplicates concurrent calls so repeated `/reload`s don't stack requests.
+ * Errors are swallowed (a failed fetch leaves that side of the cache as-is;
+ * routing falls back to the public API when the proxy catalog is unavailable).
  */
 export function triggerDiscovery(accessToken: string, baseUrl: string): void {
 	if (discoveryInFlight) return;
 	discoveryInFlight = (async () => {
-		const body = await fetchLiveCatalog(accessToken, baseUrl);
+		const [body, proxyBody] = await Promise.all([
+			fetchLiveCatalog(accessToken, baseUrl),
+			fetchLiveCatalog(accessToken, CLI_PROXY_BASE_URL),
+		]);
 		if (body && Array.isArray(body.data)) discoveredBody = body;
+		if (proxyBody && Array.isArray(proxyBody.data)) {
+			discoveredProxyIds = new Set(
+				proxyBody.data.filter((e) => isChatModelEntry(e.id)).map((e) => e.id),
+			);
+		}
 		discoveryInFlight = null;
 	})();
 }
@@ -336,6 +365,7 @@ export function triggerDiscovery(accessToken: string, baseUrl: string): void {
 /** Clear the discovery cache. For tests only. */
 export function resetDiscoveryForTests(): void {
 	discoveredBody = null;
+	discoveredProxyIds = new Set();
 	discoveryInFlight = null;
 }
 

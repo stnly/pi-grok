@@ -65,15 +65,16 @@ Choose **Use a subscription**, select **xAI (SuperGrok Subscription)**. Approve 
 - **grok-4.20-0309-non-reasoning**
 - **grok-4.20-multi-agent-0309**
 
-This is the built-in fallback list. On login, pi-grok also fetches
-`api.x.ai/v1/models` and merges the live catalog in, so new Grok releases
-appear without an extension update. The first model load after login uses the
-fallback list; the catalog populates in the background and the next `/reload`
-surfaces discovered models. If the fetch fails, the fallback list is used.
-
-Both xAI endpoints stay in play: public-API models (and newly discovered ids
-from `/models`) use `api.x.ai`; subscription-only models like Composer keep
-the CLI chat proxy.
+On login, pi-grok fetches both xAI endpoints: `api.x.ai/v1/models`
+(public catalog) and the CLI chat proxy `cli-chat-proxy.grok.com/v1/models`
+(subscription catalog). The public catalog supplies discovered ids and
+authoritative context windows; the proxy catalog drives routing. Any model
+the proxy serves routes through the CLI chat proxy so requests ride your
+SuperGrok subscription quota instead of billed API credits. Models absent
+from the proxy fall back to `api.x.ai`. The first model load after login uses
+the fallback list; the catalogs populate in the background and the next
+`/reload` applies the new ids and routing. If a fetch fails, the fallback
+list is used and routing defaults to the public API.
 
 Filter or reorder with `PI_XAI_OAUTH_MODELS`. The filter is re-applied after
 live discovery, so it still holds when new catalog ids arrive:

@@ -169,6 +169,54 @@ describe("mergeLiveModels", () => {
 	});
 });
 
+describe("proxy-preferred routing", () => {
+	const base = FALLBACK_MODELS;
+
+	it("routes a proxy-available model through the CLI proxy", () => {
+		// grok-4.5 is on both endpoints; proxy availability wins routing.
+		const merged = mergeLiveModels(
+			base,
+			{ data: [{ id: "grok-4.5", context_length: 500_000 }] },
+			new Set(["grok-4.5"]),
+		);
+		const m = merged.find((x) => x.id === "grok-4.5")!;
+		expect(m.baseUrl).toBe(CLI_PROXY_URL);
+		expect(m.headers).toBeDefined();
+	});
+
+	it("routes a newly discovered proxy-available id through the CLI proxy", () => {
+		const merged = mergeLiveModels(
+			base,
+			{ data: [{ id: "grok-9-future", context_length: 2_000_000 }] },
+			new Set(["grok-9-future"]),
+		);
+		const m = merged.find((x) => x.id === "grok-9-future")!;
+		expect(m.baseUrl).toBe(CLI_PROXY_URL);
+		expect(m.headers).toBeDefined();
+	});
+
+	it("keeps a model on the public API when the proxy catalog omits it", () => {
+		const merged = mergeLiveModels(
+			base,
+			{ data: [{ id: "grok-4.5", context_length: 500_000 }] },
+			new Set(), // proxy catalog empty
+		);
+		const m = merged.find((x) => x.id === "grok-4.5")!;
+		expect(m.baseUrl).toBeUndefined();
+		expect(m.headers).toBeUndefined();
+	});
+
+	it("falls back to the public API when no proxy set is provided", () => {
+		// Back-compat: callers that don't pass a proxy set get public-API routing.
+		const merged = mergeLiveModels(
+			base,
+			{ data: [{ id: "grok-4.5", context_length: 500_000 }] },
+		);
+		const m = merged.find((x) => x.id === "grok-4.5")!;
+		expect(m.baseUrl).toBeUndefined();
+	});
+});
+
 describe("applyDiscoveredModels + env filter", () => {
 	beforeEach(() => {
 		resetDiscoveryForTests();
@@ -318,15 +366,21 @@ describe("discovery cache", () => {
 			if (!u.endsWith("/models")) {
 				return new Response("not found", { status: 404 });
 			}
-			return new Response(
-				JSON.stringify({
-					data: [
-						{ id: "grok-4.5", context_length: 500_000, max_output_tokens: 30_000 },
-						{ id: "grok-9-future", context_length: 2_000_000, max_output_tokens: 64_000 },
-					],
-				}),
-				{ status: 200, headers: { "Content-Type": "application/json" } },
-			);
+			// Public API returns the full catalog; CLI proxy returns a subset.
+			// Models on both endpoints route through the proxy (subscription path).
+			const isProxy = u.startsWith(CLI_PROXY_URL);
+			const data = isProxy
+				? [
+					{ id: "grok-4.5", context_length: 500_000, max_output_tokens: 30_000 },
+				]
+				: [
+					{ id: "grok-4.5", context_length: 500_000, max_output_tokens: 30_000 },
+					{ id: "grok-9-future", context_length: 2_000_000, max_output_tokens: 64_000 },
+				];
+			return new Response(JSON.stringify({ data }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
 		}) as typeof fetch;
 	});
 
@@ -361,8 +415,13 @@ describe("discovery cache", () => {
 		const future = merged.find((m) => m.id === "grok-9-future");
 		expect(future).toBeDefined();
 		expect(future?.contextWindow).toBe(2_000_000);
-		// Public API default — no CLI proxy override on discovered ids.
+		// grok-9-future is on the public catalog only, so it rides the public API.
 		expect(future?.baseUrl).toBeUndefined();
+		// grok-4.5 is on both endpoints; proxy-preferred routing sends it to
+		// the CLI proxy.
+		const g45 = merged.find((m) => m.id === "grok-4.5")!;
+		expect(g45.baseUrl).toBe(CLI_PROXY_URL);
+		expect(g45.headers).toBeDefined();
 	});
 
 	it("rebuildModelsForOAuth appends discovered ids once the cache is warm", async () => {
@@ -395,7 +454,12 @@ describe("discovery cache", () => {
 		expect(future).toBeDefined();
 		expect(future.provider).toBe("xai-oauth");
 		expect(future.api).toBe("openai-responses");
+		// grok-9-future is public-catalog only → public API base URL.
 		expect(future.baseUrl).toBe("https://api.x.ai/v1");
+		// grok-4.5 is on both endpoints → routed through the CLI proxy.
+		const g45 = result.find((m) => m.id === "grok-4.5")!;
+		expect(g45.baseUrl).toBe(CLI_PROXY_URL);
+		expect(g45.headers).toBeDefined();
 		// Non-provider models pass through.
 		expect(result.some((m) => m.provider === "other")).toBe(true);
 		// CLI-proxy model still present with its own baseUrl.
