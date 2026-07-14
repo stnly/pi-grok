@@ -18,6 +18,7 @@ const DISCOVERY_URL = `${ISSUER}/.well-known/openid-configuration`;
 const CLIENT_ID = process.env.PI_XAI_OAUTH_CLIENT_ID || "b1a00492-073a-47ea-816f-4c329264a828";
 const SCOPE = process.env.PI_XAI_OAUTH_SCOPE || "openid profile email offline_access grok-cli:access api:access";
 const CALLBACK_HOST = process.env.PI_XAI_OAUTH_CALLBACK_HOST || "127.0.0.1";
+const DEFAULT_CALLBACK_PORT = 56121;
 const CALLBACK_PORT = parseCallbackPort(process.env.PI_XAI_OAUTH_CALLBACK_PORT);
 const CALLBACK_PATH = "/callback";
 /** Refresh 5 min before actual expiry. */
@@ -27,9 +28,9 @@ const ID_TOKEN_CLOCK_SKEW_MS = 30_000;
 
 /** Parse the callback-port override, falling back to the default on anything invalid. */
 function parseCallbackPort(raw: string | undefined): number {
-	if (!raw) return 56121;
+	if (!raw) return DEFAULT_CALLBACK_PORT;
 	const parsed = Number.parseInt(raw, 10);
-	return Number.isFinite(parsed) && parsed > 0 && parsed < 65536 ? parsed : 56121;
+	return Number.isFinite(parsed) && parsed > 0 && parsed < 65536 ? parsed : DEFAULT_CALLBACK_PORT;
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -515,7 +516,6 @@ async function exchangeCode(
 		refresh,
 		expires: Date.now() + expiresIn * 1000 - REFRESH_SKEW_MS,
 		tokenEndpoint,
-		discovery: { authorization_endpoint: "", token_endpoint: tokenEndpoint },
 		idToken,
 		tokenType: String(payload.token_type ?? "Bearer"),
 		baseUrl: getBaseUrl(),
@@ -571,16 +571,25 @@ export async function login(
 				})
 			: undefined;
 
-		// First to settle wins. When no manual-paste promise is wired (the
-		// caller didn't supply onManualCodeInput), do NOT race against a
-		// resolved promise — that would settle before the callback fires and
-		// fall through with `outcome` still undefined.
+		// First to settle wins. When a manual-paste promise is wired we race
+		// it against the callback wait on a private AbortController, so when
+		// the paste wins we abort the losing callback wait and tear down its
+		// 180s timer + listener instead of leaving them to fire into the void.
+		// The login signal is forwarded so an external cancel reaches the wait.
 		let outcome: CallbackOutcome | undefined;
 		if (manualPromise) {
+			const callbackAbort = new AbortController();
+			const onLoginAbort = () => callbackAbort.abort();
+			if (signal) {
+				if (signal.aborted) callbackAbort.abort();
+				signal.addEventListener("abort", onLoginAbort, { once: true });
+			}
 			await Promise.race([
-				callback.waitForCallback(180_000, signal).then((o) => { outcome = o; }),
+				callback.waitForCallback(180_000, callbackAbort.signal).then((o) => { outcome = o; }),
 				manualPromise,
 			]);
+			callbackAbort.abort();
+			signal?.removeEventListener("abort", onLoginAbort);
 		} else {
 			outcome = await callback.waitForCallback(180_000, signal);
 		}
@@ -612,25 +621,28 @@ export async function login(
 			outcome = { kind: "ok", code: parsed.code, state: parsed.state ?? state };
 		}
 
-		// Single switch for every source. Cancelled and error both go through
-		// outcomeToError, the only site that mints the cancel sentinel.
-		if (!outcome || outcome.kind === "cancelled" || outcome.kind === "error") {
+		// Capture the settled outcome before any await. When the manual path
+		// won, aborting the callback wait above resolves its abandoned promise
+		// to `cancelled` on a later microtask; reading through `resolved` keeps
+		// that late overwrite from racing the checks below.
+		const resolved = outcome;
+		if (!resolved || resolved.kind === "cancelled" || resolved.kind === "error") {
 			throw outcomeToError(
-				outcome ?? { kind: "error", message: "xAI OAuth callback produced no outcome." },
+				resolved ?? { kind: "error", message: "xAI OAuth callback produced no outcome." },
 			);
 		}
 
-		// From here on outcome is `ok`. Validate the CSRF state and code
-		// presence, then exchange. These carry distinct codes (STATE_MISMATCH,
-		// CODE_MISSING) that outcomeToError's single AUTHORIZATION_FAILED would
-		// collapse, so they stay direct throws.
-		if (outcome.state !== state) {
+		// Validate the CSRF state and code presence, then exchange. These
+		// carry distinct codes (STATE_MISMATCH, CODE_MISSING) that
+		// outcomeToError's single AUTHORIZATION_FAILED would collapse, so they
+		// stay direct throws.
+		if (resolved.state !== state) {
 			throw new XaiOAuthError(
 				"xAI OAuth state mismatch — possible CSRF.",
 				XaiErrorCode.STATE_MISMATCH,
 			);
 		}
-		if (!outcome.code) {
+		if (!resolved.code) {
 			throw new XaiOAuthError(
 				"xAI OAuth callback did not include an authorization code.",
 				XaiErrorCode.CODE_MISSING,
@@ -640,7 +652,7 @@ export async function login(
 		callbacks.onProgress?.("Exchanging authorization code for tokens...");
 		const credentials = await exchangeCode(
 			discovery.token_endpoint,
-			outcome.code,
+			resolved.code,
 			callback.redirectUri,
 			verifier,
 			nonce,
