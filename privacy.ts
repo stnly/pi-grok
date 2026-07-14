@@ -21,8 +21,7 @@ import {
 	Text,
 	TruncatedText,
 } from "@earendil-works/pi-tui";
-import { DynamicBorder } from "@earendil-works/pi-coding-agent";
-import { keyText } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, keyText } from "@earendil-works/pi-coding-agent";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { privacyChoices, type PrivacyChoice } from "./account.js";
 

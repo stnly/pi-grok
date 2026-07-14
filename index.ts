@@ -58,6 +58,19 @@ function streamGrok(
 	});
 }
 
+/**
+ * Format a proxy/account error for display. A `reloginRequired` error means
+ * the access token is bad or expired, so skip the raw dump and point at /login.
+ */
+function formatProxyError(err: unknown, prefix: string): string {
+	if (err instanceof XaiOAuthError) {
+		if (err.reloginRequired) return "xAI session expired. Run /login to re-authenticate.";
+		return `${prefix}: ${err.message} (code: ${err.code})`;
+	}
+	const msg = err instanceof Error ? err.message : String(err);
+	return `${prefix}: ${msg}`;
+}
+
 // ─── Extension entry point ───────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
@@ -162,8 +175,7 @@ export default function (pi: ExtensionAPI) {
 				try {
 					user = await fetchUser(token);
 				} catch (err) {
-					const msg = err instanceof XaiOAuthError ? `${err.message} (code: ${err.code})` : err instanceof Error ? err.message : String(err);
-					ctx.ui.notify(`xAI account lookup failed: ${msg}`, "warning");
+					ctx.ui.notify(formatProxyError(err, "xAI account lookup failed"), "warning");
 				}
 			}
 
@@ -201,8 +213,7 @@ export default function (pi: ExtensionAPI) {
 			try {
 				user = await fetchUser(token);
 			} catch (err) {
-				const msg = err instanceof XaiOAuthError ? `${err.message} (code: ${err.code})` : err instanceof Error ? err.message : String(err);
-				ctx.ui.notify(`xAI privacy: ${msg}`, "warning");
+				ctx.ui.notify(formatProxyError(err, "xAI privacy"), "warning");
 				return;
 			}
 			if (user.isZdr) {
@@ -237,8 +248,7 @@ export default function (pi: ExtensionAPI) {
 					"info",
 				);
 			} catch (err) {
-				const msg = err instanceof XaiOAuthError ? `${err.message} (code: ${err.code})` : err instanceof Error ? err.message : String(err);
-				ctx.ui.notify(`xAI privacy: ${msg}`, "warning");
+				ctx.ui.notify(formatProxyError(err, "xAI privacy"), "warning");
 			}
 		},
 	});

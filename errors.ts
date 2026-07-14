@@ -41,8 +41,4 @@ export const XaiErrorCode = {
 	AUTH_MISSING: "auth_missing",
 	/** A cli-chat-proxy call (account, privacy, billing) failed. */
 	PROXY_REQUEST_FAILED: "proxy_request_failed",
-	/** Loopback callback server could not bind. */
-	CALLBACK_BIND_FAILED: "callback_bind_failed",
-	/** Loopback callback timed out. */
-	CALLBACK_TIMEOUT: "callback_timeout",
 } as const;
