@@ -39,6 +39,8 @@ export const XaiErrorCode = {
 	REFRESH_FAILED: "refresh_failed",
 	/** No credentials stored. */
 	AUTH_MISSING: "auth_missing",
+	/** A cli-chat-proxy call (account, privacy, billing) failed. */
+	PROXY_REQUEST_FAILED: "proxy_request_failed",
 	/** Loopback callback server could not bind. */
 	CALLBACK_BIND_FAILED: "callback_bind_failed",
 	/** Loopback callback timed out. */
