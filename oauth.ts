@@ -18,10 +18,19 @@ const DISCOVERY_URL = `${ISSUER}/.well-known/openid-configuration`;
 const CLIENT_ID = process.env.PI_XAI_OAUTH_CLIENT_ID || "b1a00492-073a-47ea-816f-4c329264a828";
 const SCOPE = process.env.PI_XAI_OAUTH_SCOPE || "openid profile email offline_access grok-cli:access api:access";
 const CALLBACK_HOST = process.env.PI_XAI_OAUTH_CALLBACK_HOST || "127.0.0.1";
-const CALLBACK_PORT = Number.parseInt(process.env.PI_XAI_OAUTH_CALLBACK_PORT || "56121", 10);
+const CALLBACK_PORT = parseCallbackPort(process.env.PI_XAI_OAUTH_CALLBACK_PORT);
 const CALLBACK_PATH = "/callback";
 /** Refresh 5 min before actual expiry. */
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
+/** Tolerance for id_token exp against issuer clock drift. */
+const ID_TOKEN_CLOCK_SKEW_MS = 30_000;
+
+/** Parse the callback-port override, falling back to the default on anything invalid. */
+function parseCallbackPort(raw: string | undefined): number {
+	if (!raw) return 56121;
+	const parsed = Number.parseInt(raw, 10);
+	return Number.isFinite(parsed) && parsed > 0 && parsed < 65536 ? parsed : 56121;
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -40,6 +49,36 @@ export interface XaiOAuthCredentials {
 	idToken?: string;
 	tokenType?: string;
 	baseUrl?: string;
+}
+
+/**
+ * Discriminated result of the OAuth callback wait. One fact, one representation.
+ *
+ * Every source (browser callback, manual paste, abort signal, timeout, server
+ * error) funnels into one of these variants. `login()` switches on `kind`
+ * once; `outcomeToError()` is the single boundary that converts the
+ * `cancelled` variant into the `Error("Login cancelled")` sentinel pi's
+ * LoginDialog matches on.
+ */
+type CallbackOutcome =
+	| { kind: "ok"; code: string; state: string }
+	| { kind: "cancelled" }
+	| { kind: "error"; message: string };
+
+/** Sentinel message pi's LoginDialog matches on to suppress the error UI. */
+const LOGIN_CANCELLED = "Login cancelled";
+
+/**
+ * Convert a non-ok callback outcome into the thrown error pi's dialog expects.
+ *
+ * `cancelled` becomes `Error(LOGIN_CANCELLED)`, which pi's LoginDialog swallows.
+ * `error` becomes a typed `XaiOAuthError`. This is the only site that produces
+ * the thrown cancel sentinel, so the `LOGIN_CANCELLED` literal lives nowhere
+ * else and the triplication the pre-refactor code had can't regress.
+ */
+function outcomeToError(outcome: Extract<CallbackOutcome, { kind: "cancelled" | "error" }>): Error {
+	if (outcome.kind === "cancelled") return new Error(LOGIN_CANCELLED);
+	return new XaiOAuthError(outcome.message, XaiErrorCode.AUTHORIZATION_FAILED);
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -99,6 +138,15 @@ function parseRedirectUrl(input: string): { code?: string; state?: string } {
 // ─── Endpoint validation ──────────────────────────────────────────────────────
 
 /**
+ * True for HTTPS URLs on the xAI origin (x.ai / *.x.ai). Used both to pin OIDC
+ * discovery endpoints and to validate id_token issuers.
+ */
+function isXaiOrigin(url: URL): boolean {
+	const host = url.hostname.toLowerCase();
+	return url.protocol === "https:" && (host === "x.ai" || host.endsWith(".x.ai"));
+}
+
+/**
  * Refuse any OIDC endpoint that isn't HTTPS on the xAI origin.
  *
  * The cached discovery response is long-lived in auth.json.  A single MITM
@@ -116,14 +164,7 @@ function validateEndpoint(value: string, field: string): string {
 			XaiErrorCode.DISCOVERY_INVALID_ORIGIN,
 		);
 	}
-	if (url.protocol !== "https:") {
-		throw new XaiOAuthError(
-			`xAI OAuth ${field} must use HTTPS: ${value}`,
-			XaiErrorCode.DISCOVERY_INVALID_ORIGIN,
-		);
-	}
-	const host = url.hostname.toLowerCase();
-	if (host !== "x.ai" && host !== "auth.x.ai" && host !== "accounts.x.ai" && !host.endsWith(".x.ai")) {
+	if (!isXaiOrigin(url)) {
 		throw new XaiOAuthError(
 			`Refusing non-xAI OAuth ${field}: ${value}`,
 			XaiErrorCode.DISCOVERY_INVALID_ORIGIN,
@@ -161,6 +202,56 @@ export async function discover(): Promise<XaiDiscovery> {
 
 // ─── Loopback callback server ────────────────────────────────────────────────
 
+/**
+ * Resolve as soon as one of {callback, timeout, abort} fires, and clean up the
+ * others. Whichever branch wins, the losing timer and listener are torn down,
+ * leaving no leaked setTimeout and no dangling abort handler. Returns a
+ * CallbackOutcome so the caller has one switch to make.
+ */
+function raceCallback(
+	callbackPromise: Promise<CallbackResult>,
+	timeoutMs: number,
+	signal?: AbortSignal,
+): Promise<CallbackOutcome> {
+	return new Promise((resolve) => {
+		let done = false;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const onAbort = () => finish({ kind: "cancelled" });
+		const finish = (o: CallbackOutcome) => {
+			if (done) return;
+			done = true;
+			if (timer) clearTimeout(timer);
+			signal?.removeEventListener("abort", onAbort);
+			resolve(o);
+		};
+
+		// Already-aborted signal: settle immediately, before wiring anything.
+		if (signal?.aborted) {
+			finish({ kind: "cancelled" });
+			return;
+		}
+
+		timer = setTimeout(
+			() => finish({ kind: "error", message: "Timed out waiting for xAI OAuth callback." }),
+			timeoutMs,
+		);
+
+		if (signal) signal.addEventListener("abort", onAbort, { once: true });
+
+		callbackPromise.then(
+			(r) => finish(
+				r.error
+					? { kind: "error", message: r.errorDescription ?? r.error ?? "xAI authorization failed." }
+					: { kind: "ok", code: r.code ?? "", state: r.state ?? "" },
+			),
+			(err) => finish({
+				kind: "error",
+				message: err instanceof Error ? err.message : String(err),
+			}),
+		);
+	});
+}
+
 interface CallbackResult {
 	code?: string;
 	state?: string;
@@ -171,9 +262,10 @@ interface CallbackResult {
 function startCallbackServer(): Promise<{
 	server: import("node:http").Server;
 	redirectUri: string;
-	waitForCallback: (timeoutMs: number, signal?: AbortSignal) => Promise<CallbackResult>;
+	waitForCallback: (timeoutMs: number, signal?: AbortSignal) => Promise<CallbackOutcome>;
 }> {
 	let settle: ((value: CallbackResult) => void) | undefined;
+	let served = false; // first terminal redirect wins; later ones are acknowledged and dropped
 	const callbackPromise = new Promise<CallbackResult>((resolve) => { settle = resolve; });
 
 	const server = createServer((req, res) => {
@@ -206,6 +298,16 @@ function startCallbackServer(): Promise<{
 				error: url.searchParams.get("error") ?? undefined,
 				errorDescription: url.searchParams.get("error_description") ?? undefined,
 			};
+
+			if (served) {
+				// Duplicate redirect (browser back-button, stale tab). We already
+				// have an outcome; acknowledge and drop it so it can't double-settle.
+				res.statusCode = 200;
+				res.setHeader("Content-Type", "text/html; charset=utf-8");
+				res.end("<html><body><h1>xAI login already handled.</h1>You can close this tab.</body></html>");
+				return;
+			}
+			served = true;
 
 			res.statusCode = result.error ? 400 : 200;
 			res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -247,31 +349,18 @@ function startCallbackServer(): Promise<{
 				errorDescription: err instanceof Error ? err.message : String(err),
 			});
 		});
+		// The listener must not keep the event loop alive on its own (pi
+		// drives the loop during login), and half-open connections should be
+		// dropped fast rather than wedging the socket.
+		server.unref();
+		server.requestTimeout = 10_000;
+		server.headersTimeout = 12_000;
 		const redirectUri = `http://${CALLBACK_HOST}:${actualPort}${CALLBACK_PATH}`;
 		return {
 			server,
 			redirectUri,
-			waitForCallback: (timeoutMs: number, signal?: AbortSignal) => {
-				const branches: Promise<CallbackResult>[] = [
-					callbackPromise,
-					new Promise<CallbackResult>((resolve) =>
-						setTimeout(
-							() => resolve({ error: "timeout", errorDescription: "Timed out waiting for xAI OAuth callback." }),
-							timeoutMs,
-						),
-					),
-				];
-				if (signal) {
-					branches.push(
-						signal.aborted
-							? Promise.resolve({ error: "aborted", errorDescription: "Login cancelled" })
-							: new Promise<CallbackResult>((resolve) =>
-								signal.addEventListener("abort", () => resolve({ error: "aborted", errorDescription: "Login cancelled" }), { once: true }),
-							),
-					);
-				}
-				return Promise.race(branches);
-			},
+			waitForCallback: (timeoutMs: number, signal?: AbortSignal) =>
+				raceCallback(callbackPromise, timeoutMs, signal),
 		};
 	})();
 }
@@ -333,15 +422,15 @@ function validateIdToken(idToken: string, expectedNonce: string): void {
 		);
 	}
 
-	// Issuer check: must be https://auth.x.ai or *.x.ai.
+	// Issuer must be HTTPS on the xAI origin (https://auth.x.ai or *.x.ai).
 	const iss = typeof claims.iss === "string" ? claims.iss : "";
+	let issUrl: URL | undefined;
 	try {
-		const issUrl = new URL(iss);
-		const host = issUrl.hostname.toLowerCase();
-		if (issUrl.protocol !== "https:" || (!host.endsWith(".x.ai") && host !== "x.ai")) {
-			throw 0; // triggers the catch below
-		}
+		issUrl = new URL(iss);
 	} catch {
+		// unparseable issuer URL, fall through to the rejection below
+	}
+	if (!issUrl || !isXaiOrigin(issUrl)) {
 		throw new XaiOAuthError(
 			`xAI id_token has unexpected issuer: ${iss}`,
 			XaiErrorCode.ID_TOKEN_INVALID,
@@ -366,8 +455,8 @@ function validateIdToken(idToken: string, expectedNonce: string): void {
 		);
 	}
 
-	// If exp is present, it must be in the future (30s clock skew allowed).
-	if (typeof claims.exp === "number" && claims.exp * 1000 < Date.now() - 30_000) {
+	// If exp is present, it must be in the future, within clock-skew tolerance.
+	if (typeof claims.exp === "number" && claims.exp * 1000 < Date.now() - ID_TOKEN_CLOCK_SKEW_MS) {
 		throw new XaiOAuthError(
 			"xAI id_token has expired.",
 			XaiErrorCode.ID_TOKEN_INVALID,
@@ -439,7 +528,7 @@ export async function login(
 	callbacks: import("@earendil-works/pi-ai").OAuthLoginCallbacks,
 ): Promise<import("@earendil-works/pi-ai").OAuthCredentials> {
 	const { signal } = callbacks;
-	if (signal?.aborted) throw new Error("Login cancelled");
+	if (signal?.aborted) throw outcomeToError({ kind: "cancelled" });
 
 	const discovery = await discover();
 	const { verifier, challenge } = await generatePKCE();
@@ -485,15 +574,15 @@ export async function login(
 		// First to settle wins. When no manual-paste promise is wired (the
 		// caller didn't supply onManualCodeInput), do NOT race against a
 		// resolved promise — that would settle before the callback fires and
-		// fall through to the state check with `result` still undefined.
-		let result: CallbackResult | undefined;
+		// fall through with `outcome` still undefined.
+		let outcome: CallbackOutcome | undefined;
 		if (manualPromise) {
 			await Promise.race([
-				callback.waitForCallback(180_000, signal).then((r) => { result = r; }),
+				callback.waitForCallback(180_000, signal).then((o) => { outcome = o; }),
 				manualPromise,
 			]);
 		} else {
-			result = await callback.waitForCallback(180_000, signal);
+			outcome = await callback.waitForCallback(180_000, signal);
 		}
 
 		// Escape was pressed in the paste prompt — propagate the cancel.
@@ -501,11 +590,12 @@ export async function login(
 			throw manualError;
 		}
 
-		// Manual paste won the race before the callback server fired.
-		// State is checked only when the pasted value carried one — a bare
-		// code paste is the user explicitly opting out of the CSRF check,
-		// trusting PKCE + the one-time code binding instead.
-		if (!result && manualCode) {
+		// Paste won the race before the browser callback fired. Normalize it to
+		// an `ok` outcome so it flows through the same validation and exchange
+		// as the browser path. State is checked only when the pasted value
+		// carried one. A bare code paste is the user opting out of
+		// the CSRF check, trusting PKCE + the one-time code binding instead.
+		if (!outcome && manualCode) {
 			const parsed = parseRedirectUrl(manualCode);
 			if (parsed.state && parsed.state !== state) {
 				throw new XaiOAuthError(
@@ -519,43 +609,38 @@ export async function login(
 					XaiErrorCode.CODE_MISSING,
 				);
 			}
-			callbacks.onProgress?.("Exchanging authorization code for tokens...");
-			const credentials = await exchangeCode(
-				discovery.token_endpoint,
-				parsed.code,
-				callback.redirectUri,
-				verifier,
-				nonce,
-			);
-			credentials.discovery = discovery;
-			return credentials;
+			outcome = { kind: "ok", code: parsed.code, state: parsed.state ?? state };
 		}
 
-		// Validate browser-callback result
-		if (result?.error) {
-			throw new XaiOAuthError(
-				result.errorDescription ?? result.error,
-				XaiErrorCode.AUTHORIZATION_FAILED,
+		// Single switch for every source. Cancelled and error both go through
+		// outcomeToError, the only site that mints the cancel sentinel.
+		if (!outcome || outcome.kind === "cancelled" || outcome.kind === "error") {
+			throw outcomeToError(
+				outcome ?? { kind: "error", message: "xAI OAuth callback produced no outcome." },
 			);
 		}
-		if (result?.state !== state) {
+
+		// From here on outcome is `ok`. Validate the CSRF state and code
+		// presence, then exchange. These carry distinct codes (STATE_MISMATCH,
+		// CODE_MISSING) that outcomeToError's single AUTHORIZATION_FAILED would
+		// collapse, so they stay direct throws.
+		if (outcome.state !== state) {
 			throw new XaiOAuthError(
 				"xAI OAuth state mismatch — possible CSRF.",
 				XaiErrorCode.STATE_MISMATCH,
 			);
 		}
-		if (!result?.code) {
+		if (!outcome.code) {
 			throw new XaiOAuthError(
 				"xAI OAuth callback did not include an authorization code.",
 				XaiErrorCode.CODE_MISSING,
 			);
 		}
 
-		// Exchange code for tokens
 		callbacks.onProgress?.("Exchanging authorization code for tokens...");
 		const credentials = await exchangeCode(
 			discovery.token_endpoint,
-			result.code,
+			outcome.code,
 			callback.redirectUri,
 			verifier,
 			nonce,
@@ -563,7 +648,7 @@ export async function login(
 		credentials.discovery = discovery;
 		return credentials;
 	} finally {
-		callback.server.close();
+		if (callback.server.listening) callback.server.close();
 	}
 }
 
