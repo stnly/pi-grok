@@ -155,7 +155,7 @@ function normalizeImageParts(value: unknown): unknown {
 		if (typeof detail === "string" && detail) obj.detail = detail;
 	}
 
-	// Normalize input_image — resolve local paths to data URIs
+	// Normalize input_image: resolve local paths to data URIs
 	if (obj.type === "input_image") {
 		const imageUrl =
 			typeof obj.image_url === "object" && obj.image_url
@@ -301,18 +301,18 @@ export function sanitizePayload(
 
 	// ── Reasoning effort ──────────────────────────────────────────────────
 	if (supportsReasoningEffort(modelId)) {
-		// This model supports the effort dial — just remap 'minimal' → 'low'
+		// This model supports the effort dial; remap 'minimal' to 'low'
 		// (xAI doesn't have a 'minimal' level).
 		const reasoning = next.reasoning as Record<string, unknown> | undefined;
 		if (reasoning && reasoning.effort === "minimal") {
 			next.reasoning = { ...reasoning, effort: "low" };
 		}
-		// Strip `summary` — xAI doesn't support it.
+		// Strip `summary`; xAI doesn't support it.
 		if (reasoning && reasoning.summary !== undefined) {
 			next.reasoning = { effort: reasoning.effort };
 		}
 	} else {
-		// Model doesn't support reasoning.effort at all — remove it.
+		// Model doesn't support reasoning.effort at all; remove it.
 		delete next.reasoning;
 	}
 

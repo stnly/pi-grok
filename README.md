@@ -153,11 +153,11 @@ ssh -N -L 56121:127.0.0.1:56121 user@remote-host
 
 Run `/login` in your remote pi session, complete the browser flow locally. If 56121 is taken, the extension picks a random port and prints it.
 
-If the callback port can't be forwarded (e.g. the random fallback above, or the browser is on a machine you can't tunnel to), pi-grok also shows a paste prompt — complete the login in the browser, then paste the final `http://127.0.0.1:.../callback?code=...` redirect URL back into pi.
+If the callback port can't be forwarded (e.g. the random fallback above, or the browser is on a machine you can't tunnel to), pi-grok also shows a paste prompt. Complete the login in the browser, then paste the final `http://127.0.0.1:.../callback?code=...` redirect URL back into pi.
 
 ## X Search
 
-The `x_search` tool lets any model (not just Grok) search X (formerly Twitter). When the model calls `x_search`, pi-grok makes a separate request to xAI's API using your OAuth credentials. The search results come back as a visible tool call in pi's UI.
+The `x_search` tool lets any model search X (formerly Twitter). When the model calls `x_search`, pi-grok makes a separate request to xAI's API using your OAuth credentials. The search results come back as a visible tool call in pi's UI.
 
 Enabled by default. Disable with:
 

@@ -101,7 +101,7 @@ describe("mergeLiveModels", () => {
 	});
 
 	it("lets live catalog fields override base metadata for a known id", () => {
-		// Live is authoritative for fields the API actually returns.
+		// Live is authoritative for fields the API returns.
 		const merged = mergeLiveModels(base, {
 			data: [
 				{ id: "grok-4.5", context_length: 999, max_output_tokens: 999 },

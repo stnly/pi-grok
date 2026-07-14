@@ -112,7 +112,7 @@ async function generatePKCE(): Promise<{ verifier: string; challenge: string }> 
 /**
  * Parse a pasted redirect URL (or bare code) the user may have dropped into
  * the manual-paste prompt. Accepts the full `http://127.0.0.1:PORT/callback?code=...&state=...`
- * redirect, a `code=...&state=...` querystring, or just the raw code.
+ * redirect, a `code=...&state=...` querystring, or the raw code.
  */
 function parseRedirectUrl(input: string): { code?: string; state?: string } {
 	const value = input.trim();
@@ -124,7 +124,7 @@ function parseRedirectUrl(input: string): { code?: string; state?: string } {
 			state: url.searchParams.get("state") ?? undefined,
 		};
 	} catch {
-		// not a URL — fall through
+		// not a URL, fall through
 	}
 	if (value.includes("code=")) {
 		const params = new URLSearchParams(value);
@@ -410,7 +410,7 @@ function decodeIdToken(token: string): IdTokenClaims | null {
  *   PKCE plus the one-time code still bind the exchange.)
  * - `exp`, if present, must be in the future (30s clock skew allowed).
  *
- * Returns silently on success; throws `ID_TOKEN_INVALID` on any mismatch.
+ * Returns on success; throws `ID_TOKEN_INVALID` on any mismatch.
  * If no id_token is present, this is a no-op (the provider may legitimately
  * omit it).
  */
@@ -451,7 +451,7 @@ function validateIdToken(idToken: string, expectedNonce: string): void {
 	// providers return nonce; when absent, PKCE + one-time code still bind.
 	if (typeof claims.nonce === "string" && claims.nonce !== expectedNonce) {
 		throw new XaiOAuthError(
-			"xAI id_token nonce mismatch — possible token injection.",
+			"xAI id_token nonce mismatch: possible token injection.",
 			XaiErrorCode.ID_TOKEN_INVALID,
 		);
 	}
@@ -594,7 +594,7 @@ export async function login(
 			outcome = await callback.waitForCallback(180_000, signal);
 		}
 
-		// Escape was pressed in the paste prompt — propagate the cancel.
+		// Escape was pressed in the paste prompt; propagate the cancel.
 		if (manualError) {
 			throw manualError;
 		}
@@ -608,7 +608,7 @@ export async function login(
 			const parsed = parseRedirectUrl(manualCode);
 			if (parsed.state && parsed.state !== state) {
 				throw new XaiOAuthError(
-					"xAI OAuth state mismatch — possible CSRF.",
+					"xAI OAuth state mismatch: possible CSRF.",
 					XaiErrorCode.STATE_MISMATCH,
 				);
 			}
@@ -638,7 +638,7 @@ export async function login(
 		// stay direct throws.
 		if (resolved.state !== state) {
 			throw new XaiOAuthError(
-				"xAI OAuth state mismatch — possible CSRF.",
+				"xAI OAuth state mismatch: possible CSRF.",
 				XaiErrorCode.STATE_MISMATCH,
 			);
 		}

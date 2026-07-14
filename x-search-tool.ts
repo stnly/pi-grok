@@ -1,10 +1,10 @@
 /**
- * x_search tool — proxy xAI's built-in X Search via a separate API call.
+ * x_search tool: proxy xAI's built-in X Search via a separate API call.
  *
  * When the model calls this tool, we make an independent request to xAI's
  * Responses API with the server-side x_search tool. This means:
  *
- *   - Any model (not just Grok) can search X
+ *   - Any model can search X
  *   - The search call uses a dedicated model with full x_search support
  *   - Results come back as structured tool output visible in pi's UI
  *   - Per-query parameters (handles, date ranges) are supported
@@ -115,7 +115,7 @@ export function registerXSearchTool(pi: ExtensionAPI) {
 		promptSnippet: "Search X (Twitter) for posts and users",
 		parameters: Type.Object({
 			query: Type.String({
-				description: "Search query — keywords, hashtags, or natural language description of what to find",
+				description: "Search query: keywords, hashtags, or natural language description of what to find",
 			}),
 			allowed_x_handles: Type.Optional(
 				Type.Array(Type.String(), {
@@ -148,7 +148,7 @@ export function registerXSearchTool(pi: ExtensionAPI) {
 				};
 			}
 
-			// Resolve base URL — prefer the provider's configured URL.
+			// Resolve base URL; prefer the provider's configured URL.
 			const allModels = ctx.modelRegistry.getAll();
 			const xaiModel = allModels.find((m) => m.provider === "xai-oauth");
 			const baseUrl = (xaiModel?.baseUrl ?? "https://api.x.ai/v1").replace(/\/+$/, "");

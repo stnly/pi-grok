@@ -1,5 +1,5 @@
 /**
- * pi-grok — xAI Grok OAuth provider for pi
+ * pi-grok: xAI Grok OAuth provider for pi
  *
  * Brings SuperGrok / Premium subscription access (including Grok Build)
  * into pi via the official xAI OAuth 2.0 + PKCE flow.
@@ -257,7 +257,7 @@ export default function (pi: ExtensionAPI) {
 	if (process.env.XAI_OAUTH_TOKEN) {
 		pi.on("session_start", async (_event, ctx) => {
 			ctx.ui.notify(
-				"[pi-grok] Using XAI_OAUTH_TOKEN bypass — no auto-refresh, no model discovery",
+				"[pi-grok] Using XAI_OAUTH_TOKEN bypass: no auto-refresh, no model discovery",
 				"warning",
 			);
 		});
