@@ -34,8 +34,25 @@ export interface XaiModelConfig {
 
 // CLI proxy base URL for models not available on the public API.
 export const CLI_PROXY_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
-const CLI_PROXY_HEADERS: Record<string, string> = {
-	"x-grok-client-version": "0.2.22",
+
+/**
+ * grok-build CLI version we identify as. Mirrors the headers the shipped CLI
+ * sends on every cli-chat-proxy request, so the proxy treats us as a first-class
+ * client. Override with `PI_XAI_CLIENT_VERSION` to track a newer CLI without a
+ * release; the value only labels traffic, it is not an auth gate.
+ */
+const GROK_CLIENT_VERSION = process.env.PI_XAI_CLIENT_VERSION || "0.2.101";
+
+/**
+ * Default cli-chat-proxy request headers. Matches the grok-build CLI's client
+ * identification set: version, surface (the product), and mode (the surface
+ * the request originates from). Reused by model discovery, account, privacy,
+ * and x-search calls so every proxy request carries the same identity.
+ */
+export const CLI_PROXY_HEADERS: Record<string, string> = {
+	"x-grok-client-version": GROK_CLIENT_VERSION,
+	"x-grok-client-surface": "grok-build",
+	"x-grok-client-mode": "grok-shell",
 };
 
 export const FALLBACK_MODELS: XaiModelConfig[] = [
@@ -285,7 +302,7 @@ async function fetchLiveCatalog(
 		const response = await fetch(`${baseUrl}/models`, {
 			headers: {
 				Authorization: `Bearer ${accessToken}`,
-				"x-grok-client-version": CLI_PROXY_HEADERS["x-grok-client-version"],
+				...CLI_PROXY_HEADERS,
 			},
 			signal: AbortSignal.timeout(10_000),
 		});

@@ -12,11 +12,11 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { CLI_PROXY_HEADERS } from "./models.js";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 const SEARCH_MODEL = process.env.PI_XAI_X_SEARCH_MODEL ?? "grok-4.5";
-const CLIENT_VERSION = process.env.PI_XAI_CLIENT_VERSION ?? "0.2.22";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -61,7 +61,7 @@ async function callXSearch(
 		headers: {
 			"Content-Type": "application/json",
 			Authorization: `Bearer ${apiKey}`,
-			"x-grok-client-version": CLIENT_VERSION,
+			...CLI_PROXY_HEADERS,
 		},
 		body: JSON.stringify(payload),
 		signal,
