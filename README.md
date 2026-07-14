@@ -97,7 +97,38 @@ Requests go through xAI's Responses API. Tool calling, streaming, and reasoning 
 /xai-status
 ```
 
-Shows your login state and available models.
+Shows your account (email, team, org), Grok Code access, coding-data privacy
+state, and available model count. The account and privacy fields come
+from the cli-chat-proxy `/user` endpoint using your OAuth token; if the lookup
+fails (offline, expired token) the model count still renders.
+
+## Coding data privacy
+
+xAI has an account-level setting controlling whether the code and context you
+send to Grok models is used to train and improve its models. `/xai-privacy`
+toggles that setting. It lives on your xAI account, not locally in pi-grok,
+so it applies across every machine and client you log in from.
+
+```
+/xai-privacy
+```
+
+Opens an inline picker with the two options, rendered in the prompt area the
+same way `/login` shows its provider list. The row matching your current mode
+is marked with a green tick, like the configured provider in `/login`.
+Up/down to move, enter to switch, escape or ctrl+c to cancel. The choices are:
+
+| Choice | Effect |
+|---|---|
+| Privacy mode | Your coding data is not used to train or improve xAI's models |
+| Share data | Your coding data may be used to train and improve xAI's models |
+
+You can also pass an alias to skip the picker and set a mode:
+`/xai-privacy opt-out` (aliases `out`, `private`) or `/xai-privacy opt-in`
+(aliases `in`, `share`).
+
+If your organization enforces Zero Data Retention, the choice is locked and
+`/xai-privacy` reports the lock instead of showing the picker.
 
 ## Env vars
 
@@ -107,6 +138,7 @@ Shows your login state and available models.
 | `PI_XAI_OAUTH_MODELS` | all models |
 | `PI_XAI_OAUTH_CALLBACK_PORT` | `56121` |
 | `PI_XAI_OAUTH_CLIENT_ID` | built-in |
+| `PI_XAI_CLIENT_VERSION` | `0.2.101` (matches shipped grok-build CLI) |
 | `XAI_OAUTH_TOKEN` | skip OAuth, use raw token (no refresh, no discovery) |
 | `PI_XAI_X_SEARCH` | `true` |
 | `PI_XAI_X_SEARCH_MODEL` | `grok-4.5` |
@@ -147,6 +179,8 @@ pi-grok/
 ├── x-search-tool.ts   # x_search tool (separate xAI request)
 ├── oauth.ts           # PKCE flow, OIDC discovery, token refresh
 ├── models.ts          # model definitions + live catalog from xAI
+├── account.ts         # account + privacy calls (cli-chat-proxy /user, /privacy)
+├── privacy.ts         # inline themed privacy picker (ctx.ui.custom, green-tick row)
 ├── sanitize.ts        # strips unsupported fields before each request
 ├── errors.ts          # typed error classes
 ├── package.json
@@ -156,6 +190,7 @@ pi-grok/
 - **Payload sanitization via `before_provider_request`** - decoupled from streaming, visible to other extensions, chainable.
 - **X Search tool** - proxy via `pi.registerTool`. Any model can search X. Per-query parameters supported.
 - **Live model catalog** - fetches `api.x.ai/v1/models` on login, merges with built-in list so new Grok releases appear without an extension update.
+- **Account + privacy commands** - `/xai-status` reads the cli-chat-proxy `/user` enrichment for account and retention state; `/xai-privacy` opens an inline themed picker (green-tick current row, matching the login selector) that toggles coding-data-retention via `PUT /privacy/coding-data-retention`.
 - **Typed errors** - `XaiOAuthError` with machine-readable codes for distinguishing retryable vs fatal failures.
 - **Web Crypto** - `crypto.subtle` for PKCE.
 

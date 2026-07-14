@@ -26,6 +26,15 @@ import {
 	triggerDiscovery,
 	type XaiModelConfig,
 } from "./models.js";
+import {
+	fetchUser,
+	formatStatusBlock,
+	parsePrivacyArg,
+	privacyLine,
+	privacyUsage,
+	setCodingDataRetention,
+} from "./account.js";
+import { runPrivacyPicker } from "./privacy.js";
 import { sanitizePayload } from "./sanitize.js";
 import { XaiOAuthError } from "./errors.js";
 import { registerXSearchTool } from "./x-search-tool.js";
@@ -127,39 +136,109 @@ export default function (pi: ExtensionAPI) {
 
 	// ── /xai-status command ───────────────────────────────────────────────
 	pi.registerCommand("xai-status", {
-		description: "Show xAI Grok OAuth status and token health",
+		description: "Show xAI Grok account, privacy, and model status",
 		handler: async (_args, ctx) => {
-			const token = process.env.XAI_OAUTH_TOKEN;
+			const grokModels = ctx.modelRegistry.getAll().filter((m: Model<Api>) => m.provider === "xai-oauth");
+
+			// Resolve the live access token. Handles both the OAuth path and the
+			// XAI_OAUTH_TOKEN env bypass; missing token means not logged in.
+			let token: string | undefined;
+			try {
+				token = await ctx.modelRegistry.getApiKeyForProvider("xai-oauth");
+			} catch {
+				token = undefined;
+			}
+
+			const tokenSource = process.env.XAI_OAUTH_TOKEN
+				? "env"
+				: token
+					? "oauth"
+					: "none";
+
+			// Fetch account enrichment best-effort: a failed lookup (offline,
+			// expired) still renders the model count so status stays useful.
+			let user = null;
 			if (token) {
-				ctx.ui.notify(
-					"⚠️  xAI: using XAI_OAUTH_TOKEN env bypass — no auto-refresh available",
-					"warning",
-				);
+				try {
+					user = await fetchUser(token);
+				} catch (err) {
+					const msg = err instanceof XaiOAuthError ? `${err.message} (code: ${err.code})` : err instanceof Error ? err.message : String(err);
+					ctx.ui.notify(`xAI account lookup failed: ${msg}`, "warning");
+				}
+			}
+
+			ctx.ui.notify(
+				formatStatusBlock({ user, modelCount: grokModels.length, tokenSource }),
+				"info",
+			);
+		},
+	});
+
+	// ── /xai-privacy command ──────────────────────────────────────────────
+	pi.registerCommand("xai-privacy", {
+		description: "Show or set xAI coding data retention (privacy mode)",
+		handler: async (args, ctx) => {
+			let token: string | undefined;
+			try {
+				token = await ctx.modelRegistry.getApiKeyForProvider("xai-oauth");
+			} catch {
+				token = undefined;
+			}
+			if (!token) {
+				ctx.ui.notify("xAI: not logged in. Run /login, choose xAI (SuperGrok Subscription).", "warning");
 				return;
 			}
 
-			// Check if OAuth credentials exist by trying to resolve the provider
-			try {
-				const registry = ctx.modelRegistry;
-				const grokModels = registry.getAll().filter((m: Model<Api>) => m.provider === "xai-oauth");
-				if (grokModels.length === 0) {
-					ctx.ui.notify("xAI: no models registered. Run /login xai-oauth first.", "warning");
-					return;
-				}
+			const parsed = parsePrivacyArg(args);
+			if (parsed.kind === "invalid") {
+				ctx.ui.notify(`Unknown argument \`${parsed.arg}\`. ${privacyUsage()}`, "warning");
+				return;
+			}
 
-				const modelNames = grokModels.slice(0, 5).map((m: Model<Api>) => m.id).join(", ");
-				const suffix = grokModels.length > 5 ? ` (+${grokModels.length - 5} more)` : "";
+			// Read current state. The /user fetch also surfaces isZdr when the
+			// org locks retention; if it does, the picker is moot.
+			let user;
+			try {
+				user = await fetchUser(token);
+			} catch (err) {
+				const msg = err instanceof XaiOAuthError ? `${err.message} (code: ${err.code})` : err instanceof Error ? err.message : String(err);
+				ctx.ui.notify(`xAI privacy: ${msg}`, "warning");
+				return;
+			}
+			if (user.isZdr) {
+				ctx.ui.notify(`xAI privacy: ${privacyLine(user)}`, "info");
+				return;
+			}
+
+			// No argument: show an inline themed picker with both modes and a
+			// green tick on the current one (mirrors the login provider
+			// selector, rendered inline like /login, not as a popup). An explicit
+			// alias skips the picker and applies.
+			let target: boolean;
+			if (parsed.kind === "select") {
+				if (!ctx.hasUI) return; // non-interactive: nothing to pick
+				const picked = await runPrivacyPicker(ctx.ui, user.codingDataRetentionOptOut);
+				if (picked === undefined) return; // cancelled
+				target = picked;
+			} else {
+				target = parsed.optOut;
+			}
+
+			// Nothing to do if the account is already in the picked mode.
+			if (target === user.codingDataRetentionOptOut) {
+				ctx.ui.notify(`xAI privacy: ${privacyLine(user)} (no change)`, "info");
+				return;
+			}
+
+			try {
+				const applied = await setCodingDataRetention(token, target);
 				ctx.ui.notify(
-					`✓ xAI Grok OAuth: ${grokModels.length} models available (${modelNames}${suffix})`,
+					`xAI privacy: ${privacyLine({ codingDataRetentionOptOut: applied })}`,
 					"info",
 				);
 			} catch (err) {
-				const msg = err instanceof XaiOAuthError
-					? `${err.message} (code: ${err.code})`
-					: err instanceof Error
-						? err.message
-						: String(err);
-				ctx.ui.notify(`xAI: ${msg}`, "warning");
+				const msg = err instanceof XaiOAuthError ? `${err.message} (code: ${err.code})` : err instanceof Error ? err.message : String(err);
+				ctx.ui.notify(`xAI privacy: ${msg}`, "warning");
 			}
 		},
 	});
