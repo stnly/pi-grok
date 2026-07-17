@@ -391,37 +391,36 @@ interface IdTokenClaims {
  * loopback redirect. Signature verification would be a future hardening
  * step requiring a JWKS fetch + cache.
  */
-export function decodeIdToken(token: string): IdTokenClaims | null {
+/** Decode a JWT's payload object without verifying its signature. Returns
+ * null for a non-JWT or unparseable token. Shared by id_token parsing and
+ * access-token exp extraction so the base64url JSON decode lives in one place. */
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
 	const parts = token.split(".");
 	if (parts.length !== 3) return null;
 	try {
 		// JWT payload is base64url without padding.
 		const b64 = parts[1]!.replace(/-/g, "+").replace(/_/g, "/");
 		const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
-		const json = atob(padded);
-		return JSON.parse(json) as IdTokenClaims;
+		return JSON.parse(atob(padded)) as Record<string, unknown>;
 	} catch {
 		return null;
 	}
 }
 
+export function decodeIdToken(token: string): IdTokenClaims | null {
+	return decodeJwtPayload(token) as IdTokenClaims | null;
+}
+
 // ─── Access-token expiry (JWT exp) ────────────────────────────────────────────
 
 /** Decode the `exp` claim (seconds since epoch) from an access-token JWT.
- * Returns null for a non-JWT or unparseable token. Used to derive the real
- * expiry independent of the stored timestamp, which can drift on clock skew
- * or when another process rotated the token. */
+ * Returns null for a non-JWT or unparseable token, or one with no numeric exp.
+ * Used to derive the real expiry independent of the stored timestamp, which
+ * can drift on clock skew or when another process rotated the token. */
 export function decodeJwtExp(token: string): number | null {
-	const parts = token.split(".");
-	if (parts.length < 2) return null;
-	try {
-		const b64 = parts[1]!.replace(/-/g, "+").replace(/_/g, "/");
-		const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
-		const claims = JSON.parse(atob(padded)) as { exp?: unknown };
-		return typeof claims.exp === "number" ? claims.exp : null;
-	} catch {
-		return null;
-	}
+	const claims = decodeJwtPayload(token);
+	if (!claims) return null;
+	return typeof claims.exp === "number" ? claims.exp : null;
 }
 
 /** True when the access token is expired or within `skewMs` of expiry. Returns
@@ -870,8 +869,6 @@ export async function login(
 		if (callback.server.listening) callback.server.close();
 	}
 }
-
-// ─── Token refresh ────────────────────────────────────────────────────────────
 
 // ─── Token refresh ────────────────────────────────────────────────────────────
 
