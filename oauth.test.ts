@@ -367,26 +367,33 @@ describe("refresh", () => {
 		expect(out.refresh).toBe("keep-me");
 	});
 
-	it("marks 400/401/403 as fatal (reloginRequired)", async () => {
-		for (const status of [400, 401, 403]) {
+	it("marks invalid_grant and invalid_client as fatal (reloginRequired)", async () => {
+		for (const error of ["invalid_grant", "invalid_client"]) {
+			globalThis.fetch = vi.fn(async () =>
+				new Response(JSON.stringify({ error, error_description: "revoked" }), {
+					status: 400, headers: { "Content-Type": "application/json" },
+				}),
+			) as typeof fetch;
+			try {
+				await refresh(creds());
+				throw new Error(`${error} should have thrown`);
+			} catch (e) {
+				expect((e as XaiOAuthError).code).toBe(XaiErrorCode.REFRESH_FAILED);
+				expect((e as XaiOAuthError).reloginRequired).toBe(true);
+				expect((e as XaiOAuthError).message).toContain("revoked");
+			}
+		}
+	});
+
+	it("treats a bare status (no OAuth error body) as retryable", async () => {
+		for (const status of [400, 401, 403, 500, 429]) {
 			globalThis.fetch = vi.fn(async () => new Response("bad", { status })) as typeof fetch;
 			try {
 				await refresh(creds());
 				throw new Error(`status ${status} should have thrown`);
 			} catch (e) {
-				expect((e as XaiOAuthError).code).toBe(XaiErrorCode.REFRESH_FAILED);
-				expect((e as XaiOAuthError).reloginRequired).toBe(true);
+				expect((e as XaiOAuthError).reloginRequired).toBe(false);
 			}
-		}
-	});
-
-	it("treats a 500 as retryable (not fatal)", async () => {
-		globalThis.fetch = vi.fn(async () => new Response("boom", { status: 500 })) as typeof fetch;
-		try {
-			await refresh(creds());
-			throw new Error("should have thrown");
-		} catch (e) {
-			expect((e as XaiOAuthError).reloginRequired).toBe(false);
 		}
 	});
 

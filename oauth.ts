@@ -618,11 +618,17 @@ export async function loginDeviceCode(
 
 	let interval = Math.max(1, device.interval ?? 5);
 	const deadline = Date.now() + Math.max(device.expires_in, 60) * 1000;
-	const sleep = (ms: number) =>
-		new Promise<void>((resolve, reject) => {
-			const t = setTimeout(resolve, ms);
-			signal?.addEventListener("abort", () => { clearTimeout(t); reject(outcomeToError({ kind: "cancelled" })); }, { once: true });
+	// Sleep between polls, rejecting early if the login is cancelled. The abort
+	// listener is removed when the timer wins so a long poll loop does not pile
+	// closures onto the login signal; an already-aborted login rejects at once.
+	const sleep = (ms: number): Promise<void> => {
+		if (signal?.aborted) return Promise.reject(outcomeToError({ kind: "cancelled" }));
+		return new Promise<void>((resolve, reject) => {
+			const onAbort = () => { clearTimeout(t); reject(outcomeToError({ kind: "cancelled" })); };
+			const t = setTimeout(() => { signal?.removeEventListener("abort", onAbort); resolve(); }, ms);
+			signal?.addEventListener("abort", onAbort, { once: true });
 		});
+	};
 
 	for (;;) {
 		// Sleep first: an immediate poll on a fresh code only returns pending.
@@ -927,9 +933,19 @@ async function refreshOnce(
 	});
 
 	if (!response.ok) {
-		const isFatal = response.status === 400 || response.status === 401 || response.status === 403;
+		// Classify by the OAuth error code in the body, not the HTTP status:
+		// `invalid_grant` (revoked/expired refresh token) and `invalid_client`
+		// are terminal and need a re-login, while a 400/403 from a transient
+		// server fault should stay retryable. Anything unparseable is treated as
+		// retryable so a blip doesn't force a re-login.
+		let errBody: { error?: string; error_description?: string } = {};
+		const text = await response.text().catch(() => "");
+		try { errBody = JSON.parse(text); } catch { /* non-JSON error body */ }
+		const code = typeof errBody.error === "string" ? errBody.error : "";
+		const isFatal = code === "invalid_grant" || code === "invalid_client";
+		const detail = errBody.error_description || code || `${response.status} ${text}`;
 		throw new XaiOAuthError(
-			`xAI token refresh failed: ${response.status} ${await response.text()}`,
+			`xAI token refresh failed: ${detail}`,
 			XaiErrorCode.REFRESH_FAILED,
 			isFatal,
 		);
