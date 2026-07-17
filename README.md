@@ -1,5 +1,9 @@
 # pi-grok
 
+<p align="center">
+  <img src="assets/pi-grok.jpg" width="720" alt="pi-grok — Pi · Grok">
+</p>
+
 xAI Grok OAuth provider for [pi](https://pi.dev). Use your SuperGrok subscription with OAuth.
 
 Log in once through your browser. Tokens refresh on their own. No API keys, no billing setup.
