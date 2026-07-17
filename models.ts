@@ -394,14 +394,22 @@ export function applyDiscoveredModels(
  * Errors are swallowed (a failed fetch leaves the cache as-is).
  */
 export function triggerDiscovery(accessToken: string, baseUrl: string): void {
-	// A second trigger while one is in flight is dropped only when it is for
-	// the same token. A token change (re-login, refresh) means the cached body
-	// may belong to a different session, so kick off a fresh fetch.
+	// Drop a second trigger only when one is in flight for the same token. A
+	// token change (re-login, refresh) means the cached body may belong to a
+	// different session, so start a fresh fetch.
+	//
+	// A superseded fetch (for an older token) must not overwrite the cache or
+	// clear the in-flight flag while the newer one runs: the worker captures its
+	// token and skips committing once discoveryLastToken has moved on, and only
+	// the promise that is still current clears discoveryInFlight (identity
+	// check, run from a chained finally so the worker never self-references).
 	if (discoveryInFlight && discoveryLastToken === accessToken) return;
 	discoveryLastToken = accessToken;
-	discoveryInFlight = (async () => {
+	const myToken = accessToken;
+	const p: Promise<void> = (async () => {
 		try {
 			const body = await fetchLiveCatalog(accessToken, baseUrl);
+			if (discoveryLastToken !== myToken) return; // superseded by a newer token
 			if (body && Array.isArray(body.data)) {
 				discoveredBody = body;
 				discoveryLastError = null;
@@ -412,28 +420,36 @@ export function triggerDiscovery(accessToken: string, baseUrl: string): void {
 				discoveryLastError = "catalog fetch failed";
 			}
 		} catch (err) {
+			if (discoveryLastToken !== myToken) return;
 			discoveryLastError = err instanceof Error ? err.message : String(err);
-		} finally {
-			discoveryInFlight = null;
 		}
 	})();
+	discoveryInFlight = p;
+	p.finally(() => {
+		if (discoveryInFlight === p) discoveryInFlight = null;
+	});
 }
 
 /** Snapshot of the discovery cache for `/xai-status`. `cold` means no
  * successful fetch has completed yet; `in-flight` means one is running;
- * `warm` means the cache holds a catalog body. */
+ * `warm` means the cache holds a catalog body. `modelCount` is the count of
+ * chat-model ids (the non-chat entries the proxy lists are filtered out at
+ * merge time, so this matches what the picker shows, not the raw list length). */
 export function discoveryStatus(): {
 	state: "cold" | "in-flight" | "warm";
 	modelCount: number;
+	fetchedAt: number;
 	lastError: string | null;
 } {
 	let state: "cold" | "in-flight" | "warm";
 	if (discoveryInFlight) state = "in-flight";
 	else if (discoveredBody) state = "warm";
 	else state = "cold";
+	const chatCount = discoveredBody?.data?.filter((e) => isChatModelEntry(e.id)).length ?? 0;
 	return {
 		state,
-		modelCount: discoveredBody?.data?.length ?? 0,
+		modelCount: chatCount,
+		fetchedAt: discoveryFetchedAt,
 		lastError: discoveryLastError,
 	};
 }

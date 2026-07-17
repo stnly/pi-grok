@@ -404,13 +404,15 @@ describe("discovery cache", () => {
 			if (!u.endsWith("/models")) {
 				return new Response("not found", { status: 404 });
 			}
-			// The proxy catalog is no longer fetched; discovery hits the public
-			// catalog only, for enrichment (context windows, new ids).
+			// Discovery hits the cli-chat-proxy /v1/models catalog for enrichment
+			// (context windows, new ids). Include a non-chat entry to prove the
+			// status count filters it out.
 			return new Response(
 				JSON.stringify({
 					data: [
 						{ id: "grok-4.5", context_length: 500_000, max_output_tokens: 30_000 },
 						{ id: "grok-9-future", context_length: 2_000_000, max_output_tokens: 64_000 },
+						{ id: "grok-embedding-v1", context_length: 8_000 },
 					],
 				}),
 				{ status: 200, headers: { "Content-Type": "application/json" } },
@@ -447,8 +449,10 @@ describe("discovery cache", () => {
 		}
 		const status = discoveryStatus();
 		expect(status.state).toBe("warm");
+		// Two chat models; the embedding entry is filtered out of the count.
 		expect(status.modelCount).toBe(2);
 		expect(status.lastError).toBeNull();
+		expect(status.fetchedAt).toBeGreaterThan(0);
 	});
 
 	it("does not drop a re-trigger when the token has changed", () => {
@@ -459,6 +463,49 @@ describe("discovery cache", () => {
 		// (Behavioral assertion: the call returns without throwing and accepts
 		// the new token rather than no-oping on the in-flight guard.)
 		expect(discoveryStatus().state).not.toBe("cold");
+	});
+
+	it("a superseded fetch does not overwrite the cache or strand the in-flight flag", async () => {
+		// Make token A's fetch resolve slowly, then supersede with B before A lands.
+		const sharedFetch = globalThis.fetch;
+		let resolveA!: (v: Response) => void;
+		const slowA = new Promise<Response>((r) => { resolveA = r; });
+		let aCalls = 0;
+		globalThis.fetch = (async (input: string | URL | Request) => {
+			const url = String(input);
+			if (!url.endsWith("/models")) return new Response("404", { status: 404 });
+			// token-a is triggered first, so the first /models call is the slow one.
+			if (aCalls++ === 0) return slowA;
+			return new Response(JSON.stringify({ data: [
+				{ id: "grok-4.5", context_length: 500_000 },
+			] }), { status: 200, headers: { "Content-Type": "application/json" } });
+		}) as typeof fetch;
+
+		try {
+			triggerDiscovery("token-a", CLI_PROXY_URL);
+			triggerDiscovery("token-b", CLI_PROXY_URL); // supersedes A while A is pending
+
+			// Wait for B (the fast one) to settle and clear the in-flight flag.
+			const deadline = Date.now() + 2000;
+			while (discoveryStatus().state === "in-flight" && Date.now() < deadline) {
+				await new Promise((r) => setTimeout(r, 20));
+			}
+			expect(discoveryStatus().state).toBe("warm");
+			expect(discoveryStatus().modelCount).toBe(1); // B's single-model catalog
+
+			// Now let A's stale fetch complete. It must not overwrite B's cache.
+			resolveA(new Response(JSON.stringify({ data: [
+				{ id: "grok-stale", context_length: 999_999 },
+			] }), { status: 200, headers: { "Content-Type": "application/json" } }));
+			await new Promise((r) => setTimeout(r, 50));
+
+			const status = discoveryStatus();
+			expect(status.modelCount).toBe(1); // still B's, not A's stale entry
+			expect(mergeDiscoveredModels(FALLBACK_MODELS).some((m) => m.id === "grok-stale")).toBe(false);
+			expect(status.state).not.toBe("in-flight"); // A did not strand the flag
+		} finally {
+			globalThis.fetch = sharedFetch;
+		}
 	});
 
 	it("surfaces discovered models after a successful fetch (enrichment only)", async () => {

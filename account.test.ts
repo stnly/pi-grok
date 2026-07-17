@@ -186,19 +186,20 @@ describe("formatStatusBlock", () => {
 	it("renders the catalog state line when discovery is supplied", () => {
 		const warm = formatStatusBlock({
 			user: null, modelCount: 2, tokenSource: "oauth",
-			discovery: { state: "warm", modelCount: 9, lastError: null },
+			discovery: { state: "warm", modelCount: 9, fetchedAt: Date.now() - 12_000, lastError: null },
 		});
-		expect(warm).toContain("Catalog: warm (9 catalog ids)");
+		expect(warm).toContain("Catalog: warm (9 models)");
+		expect(warm).toContain("ago");
 
 		const cold = formatStatusBlock({
 			user: null, modelCount: 2, tokenSource: "oauth",
-			discovery: { state: "cold", modelCount: 0, lastError: null },
+			discovery: { state: "cold", modelCount: 0, fetchedAt: 0, lastError: null },
 		});
 		expect(cold).toContain("Catalog: cold (using built-in list)");
 
 		const failed = formatStatusBlock({
 			user: null, modelCount: 2, tokenSource: "oauth",
-			discovery: { state: "cold", modelCount: 0, lastError: "catalog fetch failed" },
+			discovery: { state: "cold", modelCount: 0, fetchedAt: 0, lastError: "catalog fetch failed" },
 		});
 		expect(failed).toContain("last error: catalog fetch failed");
 	});

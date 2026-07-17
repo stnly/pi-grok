@@ -231,7 +231,7 @@ export function formatStatusBlock(parts: {
 	user: XaiUser | null;
 	modelCount: number;
 	tokenSource: "oauth" | "env" | "none";
-	discovery?: { state: "cold" | "in-flight" | "warm"; modelCount: number; lastError: string | null };
+	discovery?: { state: "cold" | "in-flight" | "warm"; modelCount: number; fetchedAt: number; lastError: string | null };
 }): string {
 	const { user, modelCount, tokenSource, discovery } = parts;
 	const lines: string[] = [];
@@ -254,8 +254,10 @@ export function formatStatusBlock(parts: {
 	}
 
 	if (discovery) {
+		const age = discovery.fetchedAt ? formatAge(Date.now() - discovery.fetchedAt) : null;
+		const warmLabel = `warm (${discovery.modelCount} models)` + (age ? `, ${age} ago` : "");
 		const label = discovery.state === "warm"
-			? `warm (${discovery.modelCount} catalog ids)`
+			? warmLabel
 			: discovery.state === "in-flight"
 				? "fetching"
 				: "cold (using built-in list)";
@@ -266,6 +268,17 @@ export function formatStatusBlock(parts: {
 }
 
 /** "name <email>" or whichever fields are present, for the Account line. */
+/** Compact age string for a status line: "12s", "4m", "2h", "3d". */
+function formatAge(ms: number): string {
+	const s = Math.max(0, Math.round(ms / 1000));
+	if (s < 60) return `${s}s`;
+	const m = Math.round(s / 60);
+	if (m < 60) return `${m}m`;
+	const h = Math.round(m / 60);
+	if (h < 24) return `${h}h`;
+	return `${Math.round(h / 24)}d`;
+}
+
 function formatAccountLabel(user: XaiUser): string {
 	const name = [user.firstName, user.lastName].filter((s): s is string => !!s).join(" ").trim();
 	const email = user.email ?? "";
