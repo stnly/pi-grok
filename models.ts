@@ -131,7 +131,6 @@ export const FALLBACK_MODELS: XaiModelConfig[] = [
 		cost: COST_420,
 		contextWindow: 2_000_000,
 		maxTokens: 30_000,
-		thinkingLevelMap: { off: "none", minimal: null, low: null, medium: null, high: null, xhigh: null },
 	},
 	{
 		id: "grok-4.20-multi-agent-0309",

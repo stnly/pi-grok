@@ -84,8 +84,8 @@ describe("thinkingLevelMapFor", () => {
 	});
 
 	it("returns undefined for a non-effort reasoning model", () => {
-		// grok-build is reasoning but not effort-capable; the sanitizer strips
-		// its reasoning field, so no picker change is needed.
+		// grok-build is not effort-capable, so it gets no picker regardless of
+		// the reasoning flag; nothing to map.
 		expect(thinkingLevelMapFor("grok-build", true)).toBeUndefined();
 	});
 
@@ -319,7 +319,7 @@ describe("rebuildModelsForOAuth", () => {
 		expect(found.thinkingLevelMap).toEqual({ off: null, minimal: null, xhigh: "xhigh" });
 	});
 
-	it("preserves an explicit thinkingLevelMap (non-reasoning model)", () => {
+	it("does not stamp a thinkingLevelMap on the non-reasoning model", () => {
 		const result = rebuildModelsForOAuth(
 			[...ours] as Array<Record<string, unknown>>,
 			"xai-oauth",
@@ -327,14 +327,10 @@ describe("rebuildModelsForOAuth", () => {
 		const nonReasoning = result.find(
 			(m) => (m as any).id === "grok-4.20-0309-non-reasoning",
 		) as any;
-		expect(nonReasoning.thinkingLevelMap).toEqual({
-			off: "none",
-			minimal: null,
-			low: null,
-			medium: null,
-			high: null,
-			xhigh: null,
-		});
+		// The non-reasoning model is reasoning: false; getSupportedThinkingLevels
+		// short-circuits to off-only without consulting a map, so none is stamped.
+		expect(nonReasoning.thinkingLevelMap).toBeUndefined();
+		expect(nonReasoning.reasoning).toBe(false);
 	});
 
 	it("preserves non-provider models untouched", () => {
