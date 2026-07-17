@@ -182,24 +182,28 @@ export function envModelIds(): string[] {
 }
 
 /**
- * Filter/reorder `models` by an explicit id list.
+ * Filter/reorder `models` by an explicit id list, returning shallow copies.
  * Unknown ids get sensible defaults so env can pre-declare models not yet
- * in the fallback catalog. Empty `envIds` returns `models` unchanged.
+ * in the fallback catalog. Copies (not the original references) are returned
+ * so a downstream mutator cannot poison the fallback list for the process.
  */
 export function filterModelsByEnv(models: XaiModelConfig[], envIds: string[]): XaiModelConfig[] {
-	if (envIds.length === 0) return models;
+	if (envIds.length === 0) return models.map((m) => ({ ...m }));
 
 	const byId = new Map(models.map((m) => [m.id, m]));
-	return envIds.map((id) => byId.get(id) ?? {
-		id,
-		name: id,
-		reasoning: true,
-		input: ["text"] as ("text" | "image")[],
-		cost: COST_BUILD,
-		contextWindow: 1_000_000,
-		maxTokens: 30_000,
-		baseUrl: undefined,
-		headers: undefined,
+	return envIds.map((id) => {
+		const found = byId.get(id);
+		return found ? { ...found } : {
+			id,
+			name: id,
+			reasoning: true,
+			input: ["text"] as ("text" | "image")[],
+			cost: COST_BUILD,
+			contextWindow: 1_000_000,
+			maxTokens: 30_000,
+			baseUrl: undefined,
+			headers: undefined,
+		};
 	});
 }
 

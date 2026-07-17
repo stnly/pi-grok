@@ -81,6 +81,50 @@ export default function (pi: ExtensionAPI) {
 	const baseUrl = getBaseUrl();
 	const models = resolveModels();
 
+	// `usesCallbackServer` selects the host's loopback-callback login path over
+	// manual paste. It is read at runtime but is absent from the published oauth
+	// config type, so the oauth block is built as a variable of this type (excess
+	// properties are allowed for variables, not literals) and handed to the host.
+	type XaiOAuthConfig = Parameters<ExtensionAPI["registerProvider"]>[1] extends
+		{ oauth?: infer O } ? O & { usesCallbackServer: boolean } : never;
+	const oauthConfig: XaiOAuthConfig = {
+		name: "xAI (SuperGrok Subscription)",
+		usesCallbackServer: true,
+
+		async login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
+			return oauth.login(callbacks);
+		},
+
+		async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
+			return oauth.refresh(credentials);
+		},
+
+		getApiKey(credentials: OAuthCredentials): string {
+			return credentials.access;
+		},
+
+		modifyModels(models: Model<Api>[], credentials: OAuthCredentials) {
+			const creds = credentials as XaiOAuthCredentials;
+
+			// Kick off a background live-catalog fetch for enrichment (context
+			// windows, newly released ids). The OAuth session's model registry
+			// lives on the cli-chat-proxy, so discovery rides the proxy with
+			// the proxy identity headers, never api.x.ai. Routing of individual
+			// models is static and set in rebuildModelsForOAuth below.
+			if (creds.access) triggerDiscovery(creds.access, CLI_PROXY_BASE_URL);
+
+			// Full rebuild: append discovered ids, re-apply PI_XAI_OAUTH_MODELS,
+			// stamp api/provider, and route every model through the CLI proxy.
+			// rebuildModelsForOAuth is typed loosely (Record<string, unknown>[])
+			// because it rewrites provider entries generically; the result keeps
+			// the Model shape the host handed in, so cast back at the boundary.
+			return rebuildModelsForOAuth(
+				models as unknown as Array<Record<string, unknown>>,
+				"xai-oauth",
+			) as unknown as Model<Api>[];
+		},
+	};
+
 	// ── Register provider ─────────────────────────────────────────────────
 	pi.registerProvider("xai-oauth", {
 		name: "xAI (SuperGrok Subscription)",
@@ -103,40 +147,7 @@ export default function (pi: ExtensionAPI) {
 			baseUrl: CLI_PROXY_BASE_URL,
 			headers: { ...CLI_PROXY_HEADERS },
 		})),
-		oauth: {
-			name: "xAI (SuperGrok Subscription)",
-			usesCallbackServer: true,
-
-			async login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
-				return oauth.login(callbacks);
-			},
-
-			async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
-				return oauth.refresh(credentials);
-			},
-
-			getApiKey(credentials: OAuthCredentials): string {
-				return credentials.access;
-			},
-
-			modifyModels(models: unknown, credentials: unknown) {
-				const creds = credentials as XaiOAuthCredentials;
-
-				// Kick off a background live-catalog fetch for enrichment (context
-				// windows, newly released ids). The OAuth session's model registry
-				// lives on the cli-chat-proxy, so discovery rides the proxy with
-				// the proxy identity headers, never api.x.ai. Routing of individual
-				// models is static and set in rebuildModelsForOAuth below.
-				if (creds.access) triggerDiscovery(creds.access, CLI_PROXY_BASE_URL);
-
-				// Full rebuild: append discovered ids, re-apply PI_XAI_OAUTH_MODELS,
-				// stamp api/provider, and route every model through the CLI proxy.
-				return rebuildModelsForOAuth(
-					models as Array<Record<string, unknown>>,
-					"xai-oauth",
-				);
-			},
-		} as any,
+		oauth: oauthConfig,
 
 		streamSimple: streamGrok,
 	});

@@ -111,6 +111,20 @@ describe("filterModelsByEnv", () => {
 		expect(filtered[0].id).toBe("grok-custom");
 		expect(filtered[0].baseUrl).toBeUndefined();
 	});
+
+	it("returns copies, not the fallback object references, so callers cannot mutate the source", () => {
+		// Empty env: deep-equal but distinct objects.
+		const empty = filterModelsByEnv(FALLBACK_MODELS, []);
+		expect(empty).toEqual(FALLBACK_MODELS);
+		expect(empty[0]).not.toBe(FALLBACK_MODELS[0]);
+
+		// Non-empty: known-id entries are copies too.
+		const filtered = filterModelsByEnv(FALLBACK_MODELS, ["grok-4.5"]);
+		const source = FALLBACK_MODELS.find((m) => m.id === "grok-4.5")!;
+		expect(filtered[0]).not.toBe(source);
+		filtered[0].contextWindow = 1;
+		expect(source.contextWindow).not.toBe(1);
+	});
 });
 
 describe("mergeLiveModels", () => {
