@@ -484,6 +484,7 @@ async function exchangeCode(
 			redirect_uri: redirectUri,
 			code_verifier: verifier,
 		}),
+		signal: AbortSignal.timeout(15_000),
 	});
 	if (!response.ok) {
 		throw new XaiOAuthError(
@@ -689,6 +690,7 @@ export async function refresh(
 			client_id: CLIENT_ID,
 			refresh_token: credentials.refresh,
 		}),
+		signal: AbortSignal.timeout(15_000),
 	});
 
 	if (!response.ok) {
