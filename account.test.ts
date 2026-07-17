@@ -1,13 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	PRIVACY_ALIASES,
+	fetchUser,
 	formatStatusBlock,
 	parsePrivacyArg,
 	privacyChoices,
 	privacyLine,
 	privacyUsage,
+	setCodingDataRetention,
 } from "./account.js";
 import type { XaiUser } from "./account.js";
+import { XaiErrorCode, XaiOAuthError } from "./errors.js";
+import { CLI_PROXY_BASE_URL, CLI_PROXY_HEADERS } from "./models.js";
 
 // ─── parsePrivacyArg ─────────────────────────────────────────────────────────
 
@@ -177,5 +181,161 @@ describe("formatStatusBlock", () => {
 		const block = formatStatusBlock({ user: null, modelCount: 5, tokenSource: "oauth" });
 		expect(block).toContain("Models: 5 available");
 		expect(block).not.toContain("Account:");
+	});
+});
+
+// ─── Proxy network calls (mocked fetch) ──────────────────────────────────────
+
+describe("fetchUser", () => {
+	const originalFetch = globalThis.fetch;
+
+	beforeEach(() => {
+		vi.restoreAllMocks();
+	});
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+	});
+
+	function okUser(over: Partial<XaiUser> = {}): XaiUser {
+		return {
+			userId: "u1",
+			email: "a@b.com",
+			firstName: null,
+			lastName: null,
+			profileImageAssetId: null,
+			userBlockedReason: null,
+			principalType: null,
+			principalId: null,
+			teamId: null,
+			teamName: null,
+			teamRole: null,
+			teamBlockedReasons: null,
+			organizationId: null,
+			organizationName: null,
+			organizationRole: null,
+			codingDataRetentionOptOut: false,
+			hasGrokCodeAccess: true,
+			...over,
+		};
+	}
+
+	it("returns the parsed user on 200", async () => {
+		globalThis.fetch = vi.fn(async () =>
+			new Response(JSON.stringify(okUser({ email: "x@y.com" })), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
+		) as typeof fetch;
+		const user = await fetchUser("tok");
+		expect(user.email).toBe("x@y.com");
+
+		// Wire contract: GET /user with the bearer and the proxy identity headers.
+		expect(globalThis.fetch).toHaveBeenCalledWith(
+			`${CLI_PROXY_BASE_URL}/user`,
+			expect.objectContaining({
+				headers: expect.objectContaining({
+					Authorization: "Bearer tok",
+					"X-XAI-Token-Auth": CLI_PROXY_HEADERS["X-XAI-Token-Auth"],
+				}),
+			}),
+		);
+	});
+
+	it("marks 401 as fatal (reloginRequired)", async () => {
+		globalThis.fetch = vi.fn(async () => new Response("unauth", { status: 401 })) as typeof fetch;
+		try {
+			await fetchUser("tok");
+			throw new Error("should have thrown");
+		} catch (e) {
+			expect((e as XaiOAuthError).code).toBe(XaiErrorCode.PROXY_REQUEST_FAILED);
+			expect((e as XaiOAuthError).reloginRequired).toBe(true);
+		}
+	});
+
+	it("wraps a non-ok, non-401 response as PROXY_REQUEST_FAILED", async () => {
+		globalThis.fetch = vi.fn(async () => new Response("boom", { status: 500 })) as typeof fetch;
+		try {
+			await fetchUser("tok");
+			throw new Error("should have thrown");
+		} catch (e) {
+			expect((e as XaiOAuthError).code).toBe(XaiErrorCode.PROXY_REQUEST_FAILED);
+			expect((e as XaiOAuthError).reloginRequired).toBe(false);
+			expect((e as XaiOAuthError).message).toContain("500");
+		}
+	});
+
+	it("wraps a network failure as PROXY_REQUEST_FAILED", async () => {
+		globalThis.fetch = vi.fn(async () => {
+			throw new Error("offline");
+		}) as typeof fetch;
+		await expect(fetchUser("tok")).rejects.toMatchObject({
+			code: XaiErrorCode.PROXY_REQUEST_FAILED,
+		});
+	});
+});
+
+describe("setCodingDataRetention", () => {
+	const originalFetch = globalThis.fetch;
+
+	beforeEach(() => {
+		vi.restoreAllMocks();
+	});
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+	});
+
+	it("returns the echoed server state on 200", async () => {
+		globalThis.fetch = vi.fn(async () =>
+			new Response(JSON.stringify({ codingDataRetentionOptOut: true }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
+		) as typeof fetch;
+		// Requested true; server echoes true.
+		await expect(setCodingDataRetention("tok", true)).resolves.toBe(true);
+
+		// Wire contract: PUT /privacy/coding-data-retention with json + proxy headers.
+		expect(globalThis.fetch).toHaveBeenCalledWith(
+			`${CLI_PROXY_BASE_URL}/privacy/coding-data-retention`,
+			expect.objectContaining({
+				method: "PUT",
+				headers: expect.objectContaining({
+					Authorization: "Bearer tok",
+					"Content-Type": "application/json",
+					"X-XAI-Token-Auth": CLI_PROXY_HEADERS["X-XAI-Token-Auth"],
+				}),
+			}),
+		);
+	});
+
+	it("falls back to the requested value when the echo is absent", async () => {
+		globalThis.fetch = vi.fn(async () =>
+			new Response(JSON.stringify({}), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
+		) as typeof fetch;
+		await expect(setCodingDataRetention("tok", false)).resolves.toBe(false);
+	});
+
+	it("marks 401 as fatal", async () => {
+		globalThis.fetch = vi.fn(async () => new Response("unauth", { status: 401 })) as typeof fetch;
+		try {
+			await setCodingDataRetention("tok", true);
+			throw new Error("should have thrown");
+		} catch (e) {
+			expect((e as XaiOAuthError).reloginRequired).toBe(true);
+		}
+	});
+
+	it("wraps a 500 as PROXY_REQUEST_FAILED (not fatal)", async () => {
+		globalThis.fetch = vi.fn(async () => new Response("boom", { status: 500 })) as typeof fetch;
+		try {
+			await setCodingDataRetention("tok", true);
+			throw new Error("should have thrown");
+		} catch (e) {
+			expect((e as XaiOAuthError).code).toBe(XaiErrorCode.PROXY_REQUEST_FAILED);
+			expect((e as XaiOAuthError).reloginRequired).toBe(false);
+		}
 	});
 });
