@@ -2,7 +2,7 @@
 
 xAI Grok OAuth provider for [pi](https://pi.dev). Use your SuperGrok subscription with OAuth.
 
-Log in once through your browser. Tokens refresh on their own. No API keys to manage, no billing setup. Switch models, reason through problems, build things.
+Log in once through your browser. Tokens refresh on their own. No API keys, no billing setup.
 
 Brings Grok models into pi using the official xAI OAuth 2.0 flow with PKCE. Your credentials stay on your machine.
 
@@ -74,9 +74,9 @@ carry the client headers the proxy expects (`x-grok-client-version`,
 recognizes the session.
 
 A background fetch of `cli-chat-proxy.grok.com/v1/models` enriches the model
-list with authoritative context windows and surfaces newly released ids, but
-it does not drive routing. If that fetch fails, the built-in list is used and
-routing stays on the proxy.
+list with context windows and surfaces newly released ids, but it does not
+drive routing. If that fetch fails, pi-grok falls back to the built-in list
+and routing stays on the proxy.
 
 Filter or reorder with `PI_XAI_OAUTH_MODELS`. The filter is re-applied after
 live discovery, so it still holds when new catalog ids arrive:
@@ -108,8 +108,8 @@ fails (offline, expired token) the model count still renders.
 
 xAI has an account-level setting controlling whether the code and context you
 send to Grok models is used to train and improve its models. `/xai-privacy`
-toggles that setting. It lives on your xAI account, not locally in pi-grok,
-so it applies across every machine and client you log in from.
+toggles that setting. It lives on your xAI account, so it applies across
+every machine and client you log in from.
 
 ```
 /xai-privacy
