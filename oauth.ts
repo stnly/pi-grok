@@ -27,7 +27,7 @@ const REFRESH_SKEW_MS = 5 * 60 * 1000;
 const ID_TOKEN_CLOCK_SKEW_MS = 30_000;
 
 /** Parse the callback-port override, falling back to the default on anything invalid. */
-function parseCallbackPort(raw: string | undefined): number {
+export function parseCallbackPort(raw: string | undefined): number {
 	if (!raw) return DEFAULT_CALLBACK_PORT;
 	const parsed = Number.parseInt(raw, 10);
 	return Number.isFinite(parsed) && parsed > 0 && parsed < 65536 ? parsed : DEFAULT_CALLBACK_PORT;
@@ -77,7 +77,7 @@ const LOGIN_CANCELLED = "Login cancelled";
  * the thrown cancel sentinel, so the `LOGIN_CANCELLED` literal lives nowhere
  * else and the triplication the pre-refactor code had can't regress.
  */
-function outcomeToError(outcome: Extract<CallbackOutcome, { kind: "cancelled" | "error" }>): Error {
+export function outcomeToError(outcome: Extract<CallbackOutcome, { kind: "cancelled" | "error" }>): Error {
 	if (outcome.kind === "cancelled") return new Error(LOGIN_CANCELLED);
 	return new XaiOAuthError(outcome.message, XaiErrorCode.AUTHORIZATION_FAILED);
 }
@@ -114,7 +114,7 @@ async function generatePKCE(): Promise<{ verifier: string; challenge: string }> 
  * the manual-paste prompt. Accepts the full `http://127.0.0.1:PORT/callback?code=...&state=...`
  * redirect, a `code=...&state=...` querystring, or the raw code.
  */
-function parseRedirectUrl(input: string): { code?: string; state?: string } {
+export function parseRedirectUrl(input: string): { code?: string; state?: string } {
 	const value = input.trim();
 	if (!value) return {};
 	try {
@@ -142,7 +142,7 @@ function parseRedirectUrl(input: string): { code?: string; state?: string } {
  * True for HTTPS URLs on the xAI origin (x.ai / *.x.ai). Used both to pin OIDC
  * discovery endpoints and to validate id_token issuers.
  */
-function isXaiOrigin(url: URL): boolean {
+export function isXaiOrigin(url: URL): boolean {
 	const host = url.hostname.toLowerCase();
 	return url.protocol === "https:" && (host === "x.ai" || host.endsWith(".x.ai"));
 }
@@ -155,7 +155,7 @@ function isXaiOrigin(url: URL): boolean {
  * receive every subsequent refresh_token.  Validating scheme + host pins the
  * endpoint to x.ai / *.x.ai so cache poisoning can't persist.
  */
-function validateEndpoint(value: string, field: string): string {
+export function validateEndpoint(value: string, field: string): string {
 	let url: URL;
 	try {
 		url = new URL(value);
@@ -386,7 +386,7 @@ interface IdTokenClaims {
  * loopback redirect. Signature verification would be a future hardening
  * step requiring a JWKS fetch + cache.
  */
-function decodeIdToken(token: string): IdTokenClaims | null {
+export function decodeIdToken(token: string): IdTokenClaims | null {
 	const parts = token.split(".");
 	if (parts.length !== 3) return null;
 	try {
@@ -414,7 +414,7 @@ function decodeIdToken(token: string): IdTokenClaims | null {
  * If no id_token is present, this is a no-op (the provider may legitimately
  * omit it).
  */
-function validateIdToken(idToken: string, expectedNonce: string): void {
+export function validateIdToken(idToken: string, expectedNonce: string): void {
 	const claims = decodeIdToken(idToken);
 	if (!claims) {
 		throw new XaiOAuthError(
