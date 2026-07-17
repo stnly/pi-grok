@@ -25,6 +25,19 @@ interface XSearchResult {
 	citations?: Array<{ url: string; title?: string }>;
 }
 
+/** Map a thrown x_search error to the user-facing text and status shown in
+ * the tool result. 401 gets a re-login hint; anything else surfaces the
+ * message. Extracted so the mapping is testable without a tool ctx. */
+export function formatXSearchError(err: unknown): { text: string; status?: number } {
+	if (err instanceof XSearchHttpError) {
+		if (err.status === 401) {
+			return { text: "xAI authentication failed. Run /login to re-authenticate.", status: 401 };
+		}
+		return { text: `x_search failed: ${err.message}`, status: err.status };
+	}
+	return { text: `x_search failed: ${err instanceof Error ? err.message : String(err)}` };
+}
+
 /** HTTP failure from the x_search Responses call, carrying the status so the
  * tool handler can map 401 to a re-login message. */
 export class XSearchHttpError extends Error {
@@ -174,13 +187,11 @@ export function registerXSearchTool(pi: ExtensionAPI) {
 					signal,
 				);
 			} catch (err) {
-				const text = err instanceof XSearchHttpError && err.status === 401
-					? "xAI authentication failed. Run /login to re-authenticate."
-					: `x_search failed: ${err instanceof Error ? err.message : String(err)}`;
+				const mapped = formatXSearchError(err);
 				return {
-					content: [{ type: "text", text }],
+					content: [{ type: "text", text: mapped.text }],
 					isError: true,
-					details: { status: err instanceof XSearchHttpError ? err.status : undefined },
+					details: mapped.status !== undefined ? { status: mapped.status } : {},
 				};
 			}
 

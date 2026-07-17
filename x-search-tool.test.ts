@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildProxyHeaders } from "./models.js";
-import { XSearchHttpError, callXSearch } from "./x-search-tool.js";
+import { XSearchHttpError, callXSearch, formatXSearchError } from "./x-search-tool.js";
 
 const OK_RESPONSE = {
 	output: [
@@ -79,5 +79,32 @@ describe("callXSearch", () => {
 		const result = await callXSearch("tok", "https://p/v1", "cats");
 		expect(result.answer).toBe("(no results)");
 		expect(result.citations).toBeUndefined();
+	});
+});
+
+describe("formatXSearchError", () => {
+	it("maps a 401 to a re-login hint carrying the status", () => {
+		const out = formatXSearchError(new XSearchHttpError(401, "unauthorized"));
+		expect(out.status).toBe(401);
+		expect(out.text).toMatch(/re-authenticate/i);
+	});
+
+	it("surfaces a non-401 HTTP error message with its status", () => {
+		const out = formatXSearchError(new XSearchHttpError(500, "boom"));
+		expect(out.status).toBe(500);
+		expect(out.text).toContain("x_search failed");
+		expect(out.text).toContain("500");
+	});
+
+	it("surfaces a generic error with no status", () => {
+		const out = formatXSearchError(new Error("network down"));
+		expect(out.status).toBeUndefined();
+		expect(out.text).toContain("network down");
+	});
+
+	it("stringifies a non-Error throw", () => {
+		const out = formatXSearchError("oops");
+		expect(out.status).toBeUndefined();
+		expect(out.text).toContain("oops");
 	});
 });
