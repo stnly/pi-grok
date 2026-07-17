@@ -381,16 +381,6 @@ interface IdTokenClaims {
 	exp?: number;
 }
 
-/**
- * Decode a JWT payload without verifying its signature.
- *
- * We do NOT validate the JWT signature here because pi-grok has no
- * out-of-band channel to fetch xAI's rotating JWKS keys at the moment we
- * need them. The checks we *do* apply (iss, aud, nonce, exp) still close
- * the practical token-injection vectors for an OAuth code flow on a
- * loopback redirect. Signature verification would be a future hardening
- * step requiring a JWKS fetch + cache.
- */
 /** Decode a JWT's payload object without verifying its signature. Returns
  * null for a non-JWT or unparseable token. Shared by id_token parsing and
  * access-token exp extraction so the base64url JSON decode lives in one place. */

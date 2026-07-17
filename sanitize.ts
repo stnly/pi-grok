@@ -12,12 +12,16 @@
  *     array; these must be moved to top-level `instructions`.
  *   - xAI uses `text.format` instead of OpenAI's `response_format`.
  *   - xAI uses `prompt_cache_key` for conversation caching.
- *   - xAI doesn't support `prompt_cache_retention`.
+ *   - OpenAI-only fields xAI rejects with 422: `seed`, `parallel_tool_calls`,
+ *     `service_tier`, `prompt_cache_retention`.
+ *   - Tool schemas with a `/` in an enum value are rejected; the enum is dropped.
+ *   - `temperature` is clamped to [0, 2], `top_p` to [0, 1].
+ *   - Reasoning models get `include: ["reasoning.encrypted_content"]` ensured
+ *     so prior reasoning replays across turns.
  *
- * This module normalizes images and rewrites unsupported fields before the
- * request is sent.  It's intended to be called from a
- * `before_provider_request` event handler, keeping sanitization decoupled
- * from the streaming implementation.
+ * Returns a copy; the caller's payload (including nested tool schemas) is not
+ * mutated. Intended to be called from a `before_provider_request` handler,
+ * keeping sanitization decoupled from the streaming implementation.
  */
 
 import { existsSync, readFileSync } from "fs";
@@ -212,8 +216,7 @@ function rewriteFunctionCallOutput(
 				if (typeof p.text === "string") textChunks.push(p.text);
 			}
 		}
-		let imageCount = 0;
-		for (const _ of imageParts) imageCount++;
+		const imageCount = imageParts.length;
 
 		const outputText = textChunks.join("\n") || "(tool returned no text output)";
 		rewritten.push({ ...item, output: outputText });

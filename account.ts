@@ -267,7 +267,6 @@ export function formatStatusBlock(parts: {
 	return lines.join("\n");
 }
 
-/** "name <email>" or whichever fields are present, for the Account line. */
 /** Compact age string for a status line: "12s", "4m", "2h", "3d". */
 function formatAge(ms: number): string {
 	const s = Math.max(0, Math.round(ms / 1000));
@@ -279,6 +278,7 @@ function formatAge(ms: number): string {
 	return `${Math.round(h / 24)}d`;
 }
 
+/** "name <email>" or whichever fields are present, for the Account line. */
 function formatAccountLabel(user: XaiUser): string {
 	const name = [user.firstName, user.lastName].filter((s): s is string => !!s).join(" ").trim();
 	const email = user.email ?? "";
