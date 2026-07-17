@@ -4,11 +4,13 @@
  * Hardcoded fallback list + live catalog fetching from the xAI API.
  */
 
-// ─── Cost constants ($/M tokens) ──────────────────────────────────────────────
-
-const COST_BUILD = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+// ─── Cost constants ($/M tokens, base <200k-prompt tier) ───────────────────────
+// From the xAI public pricing page. The cost shape is flat, so the base tier
+// is used; long-context (>=200k prompt) pricing is not modeled. cacheWrite is
+// not published for these models, so it stays 0.
+const COST_BUILD = { input: 1, output: 2, cacheRead: 0.2, cacheWrite: 0 };
 const COST_43 = { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 };
-const COST_420 = { input: 2, output: 6, cacheRead: 0.2, cacheWrite: 0 };
+const COST_420 = { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 };
 // grok-4.5: cached input is $0.50/M (higher than the $0.20 used by 4.20/4.3).
 export const COST_45 = { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 };
 

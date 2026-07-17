@@ -87,6 +87,20 @@ describe("COST_45", () => {
 	});
 });
 
+describe("FALLBACK_MODELS pricing", () => {
+	it("grok-build matches the public pricing page (base tier)", () => {
+		const m = FALLBACK_MODELS.find((x) => x.id === "grok-build");
+		expect(m?.cost).toEqual({ input: 1, output: 2, cacheRead: 0.2, cacheWrite: 0 });
+	});
+
+	it("grok-4.20 models match the public pricing page (base tier)", () => {
+		for (const id of ["grok-4.20-0309-reasoning", "grok-4.20-0309-non-reasoning", "grok-4.20-multi-agent-0309"]) {
+			const m = FALLBACK_MODELS.find((x) => x.id === id);
+			expect(m?.cost).toEqual({ input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 });
+		}
+	});
+});
+
 describe("supportsReasoningEffort", () => {
 	it("returns true for grok-4.5", () => {
 		expect(supportsReasoningEffort("grok-4.5")).toBe(true);
