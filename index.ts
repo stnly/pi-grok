@@ -100,7 +100,7 @@ export default function (pi: ExtensionAPI) {
 			// path re-stamps this in rebuildModelsForOAuth, including discovered
 			// ids the registration map never saw.
 			baseUrl: CLI_PROXY_BASE_URL,
-			headers: CLI_PROXY_HEADERS,
+			headers: { ...CLI_PROXY_HEADERS },
 		})),
 		oauth: {
 			name: "xAI (SuperGrok Subscription)",

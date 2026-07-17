@@ -36,10 +36,10 @@ export interface XaiModelConfig {
 export const CLI_PROXY_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 
 /**
- * Client version label sent on cli-chat-proxy requests. The proxy's
- * version-gate checks this to admit the request. Override with
- * `PI_XAI_CLIENT_VERSION` to track a newer client without a release; the
- * value only labels traffic, it is not an auth gate.
+ * Client version label sent on cli-chat-proxy requests. The proxy rejects
+ * requests whose version it does not admit, so this is coupled to the proxy's
+ * accepted set. Override with `PI_XAI_CLIENT_VERSION` to track a newer client
+ * before a release ships the bump.
  */
 const GROK_CLIENT_VERSION = process.env.PI_XAI_CLIENT_VERSION || "0.2.101";
 
@@ -68,14 +68,14 @@ function platformLabel(): string {
  * Reused by inference, model discovery, account, privacy, and x-search so
  * every proxy request carries the same identity.
  */
-export const CLI_PROXY_HEADERS: Record<string, string> = {
+export const CLI_PROXY_HEADERS: Record<string, string> = Object.freeze({
 	"User-Agent": `${CLIENT_IDENTIFIER}/${GROK_CLIENT_VERSION} (${platformLabel()})`,
 	"x-grok-client-identifier": CLIENT_IDENTIFIER,
 	"x-grok-client-version": GROK_CLIENT_VERSION,
 	"x-grok-client-mode": "interactive",
 	"X-XAI-Token-Auth": "xai-grok-cli",
 	"x-authenticateresponse": "authenticate-response",
-};
+});
 
 export const FALLBACK_MODELS: XaiModelConfig[] = [
 	{
@@ -425,7 +425,7 @@ export function rebuildModelsForOAuth(
 			api: row.api ?? (template?.api as string | undefined) ?? "openai-responses",
 			provider: row.provider ?? provider,
 			baseUrl: CLI_PROXY_BASE_URL,
-			headers: CLI_PROXY_HEADERS,
+			headers: { ...CLI_PROXY_HEADERS },
 			...(thinkingLevelMap ? { thinkingLevelMap } : {}),
 		};
 	});
