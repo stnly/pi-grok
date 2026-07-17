@@ -263,7 +263,7 @@ export function sanitizePayload(
 	params: Record<string, unknown>,
 	modelId: string,
 	sessionId?: string,
-	reasons = false,
+	reasoning = false,
 ): Record<string, unknown> {
 	// Shallow-clone the top level so the host's payload object is never mutated
 	// in place. before_provider_request is a chain: later extensions, or the
@@ -348,7 +348,7 @@ export function sanitizePayload(
 	// models (the capability is passed in by the caller from the model entry);
 	// non-reasoning models produce no reasoning item either way, so the include
 	// is pointless there and is left untouched.
-	if (reasons) {
+	if (reasoning) {
 		const want = "reasoning.encrypted_content";
 		const inc = next.include;
 		if (!Array.isArray(inc)) {
