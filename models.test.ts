@@ -26,6 +26,14 @@ describe("FALLBACK_MODELS", () => {
 		expect(m?.contextWindow).toBe(500_000);
 	});
 
+	it("grok-build matches the official context window (500k)", () => {
+		const m = FALLBACK_MODELS.find((x) => x.id === "grok-build");
+		expect(m).toBeDefined();
+		// grok-build's default_models.json ships context_window 500000; a larger
+		// value skews pi's usage bar and auto-compaction.
+		expect(m?.contextWindow).toBe(500_000);
+	});
+
 	it("carries no routing hints (routing is owned by rebuildModelsForOAuth)", () => {
 		// FALLBACK is model metadata only. baseUrl/headers are stamped at rebuild
 		// time so every OAuth model rides the CLI proxy uniformly.

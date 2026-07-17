@@ -93,7 +93,7 @@ export const FALLBACK_MODELS: XaiModelConfig[] = [
 		reasoning: true,
 		input: ["text", "image"],
 		cost: COST_BUILD,
-		contextWindow: 1_000_000,
+		contextWindow: 500_000,
 		maxTokens: 30_000,
 	},
 	{
