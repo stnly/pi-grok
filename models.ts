@@ -36,23 +36,45 @@ export interface XaiModelConfig {
 export const CLI_PROXY_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 
 /**
- * grok-build CLI version we identify as. Mirrors the headers the shipped CLI
- * sends on every cli-chat-proxy request, so the proxy treats us as a first-class
- * client. Override with `PI_XAI_CLIENT_VERSION` to track a newer CLI without a
- * release; the value only labels traffic, it is not an auth gate.
+ * Client version label sent on cli-chat-proxy requests. The proxy's
+ * version-gate checks this to admit the request. Override with
+ * `PI_XAI_CLIENT_VERSION` to track a newer client without a release; the
+ * value only labels traffic, it is not an auth gate.
  */
 const GROK_CLIENT_VERSION = process.env.PI_XAI_CLIENT_VERSION || "0.2.101";
 
+/** Session product label, overridable via `GROK_CLIENT_NAME`. */
+const CLIENT_IDENTIFIER = process.env.GROK_CLIENT_NAME || "grok-shell";
+
 /**
- * Default cli-chat-proxy request headers. Matches the grok-build CLI's client
- * identification set: version, surface (the product), and mode (the surface
- * the request originates from). Reused by model discovery, account, privacy,
- * and x-search calls so every proxy request carries the same identity.
+ * Map Node's platform/arch names to the labels the proxy expects so the
+ * User-Agent matches what a native client would send (`macos`/`windows`,
+ * `aarch64`/`x86_64`). Unknown values pass through unchanged.
+ */
+function platformLabel(): string {
+	const os = process.platform === "darwin" ? "macos"
+		: process.platform === "win32" ? "windows"
+		: process.platform;
+	const arch = process.arch === "arm64" ? "aarch64"
+		: process.arch === "x64" ? "x86_64"
+		: process.arch;
+	return `${os}; ${arch}`;
+}
+
+/**
+ * Headers every cli-chat-proxy request carries: the User-Agent and client
+ * identifier, the version its gate checks, the mode label, and the two
+ * auth-middleware headers that tell the proxy this is an OAuth CLI session.
+ * Reused by inference, model discovery, account, privacy, and x-search so
+ * every proxy request carries the same identity.
  */
 export const CLI_PROXY_HEADERS: Record<string, string> = {
+	"User-Agent": `${CLIENT_IDENTIFIER}/${GROK_CLIENT_VERSION} (${platformLabel()})`,
+	"x-grok-client-identifier": CLIENT_IDENTIFIER,
 	"x-grok-client-version": GROK_CLIENT_VERSION,
-	"x-grok-client-surface": "grok-build",
-	"x-grok-client-mode": "grok-shell",
+	"x-grok-client-mode": "interactive",
+	"X-XAI-Token-Auth": "xai-grok-cli",
+	"x-authenticateresponse": "authenticate-response",
 };
 
 export const FALLBACK_MODELS: XaiModelConfig[] = [
@@ -64,8 +86,6 @@ export const FALLBACK_MODELS: XaiModelConfig[] = [
 		cost: COST_BUILD,
 		contextWindow: 200_000,
 		maxTokens: 30_000,
-		baseUrl: CLI_PROXY_BASE_URL,
-		headers: CLI_PROXY_HEADERS,
 	},
 	{
 		id: "grok-build",
@@ -214,23 +234,16 @@ function isChatModelEntry(id: string): boolean {
  * Pure and side-effect free so it can be unit-tested without network.
  * Returns `base` unchanged when `body` is null or has no `data` array.
  *
- * The live catalog is authoritative when present: its `context_length` and
- * `max_output_tokens` override the hardcoded values, and the merged list is
- * ordered by the live response. The hardcoded list fills the gaps the API
- * does not expose (display name, pricing via COST_OVERRIDES, reasoning flag).
- *
- * Routing is proxy-preferred. `proxyIds` is the set of model ids the CLI
- * proxy catalog reported as available; any id in that set gets the proxy base
- * URL and version header, so requests ride the subscription path instead of
- * the billed public API. ids absent from the proxy set fall back to the
- * provider base URL. Omitting `proxyIds` (older callers) keeps public-API
- * routing, so hardcoded proxy-only entries (composer) still carry their own
- * baseUrl from the base list.
+ * This is enrichment only: the live catalog is authoritative for
+ * `context_length` and `max_output_tokens`, the merged list follows the live
+ * response order, and newly discovered ids get sensible defaults. It does not
+ * set routing. `rebuildModelsForOAuth` is the single routing authority and
+ * sends every OAuth model through the CLI proxy, so merge stays decoupled
+ * from how requests reach xAI.
  */
 export function mergeLiveModels(
 	base: XaiModelConfig[],
 	body: { data?: ApiModelEntry[] } | null,
-	proxyIds: Set<string> = new Set(),
 ): XaiModelConfig[] {
 	if (!body || !Array.isArray(body.data)) return base;
 
@@ -240,22 +253,15 @@ export function mergeLiveModels(
 	const seen = new Set<string>();
 	const merged: XaiModelConfig[] = [];
 
-	const routeFor = (id: string): { baseUrl?: string; headers?: Record<string, string> } =>
-		proxyIds.has(id)
-			? { baseUrl: CLI_PROXY_BASE_URL, headers: CLI_PROXY_HEADERS }
-			: {};
-
 	for (const entry of grokEntries) {
 		seen.add(entry.id);
 		const existing = baseById.get(entry.id);
 		if (existing) {
-			// Live fields override; base fills name/cost/reasoning. Proxy routing
-			// wins over whatever the base entry carried.
+			// Live fields override; base fills name/cost/reasoning.
 			merged.push({
 				...existing,
 				contextWindow: entry.context_length ?? existing.contextWindow,
 				maxTokens: entry.max_output_tokens ?? existing.maxTokens,
-				...routeFor(entry.id),
 			});
 		} else {
 			merged.push({
@@ -266,17 +272,13 @@ export function mergeLiveModels(
 				cost: COST_OVERRIDES[entry.id] ?? COST_420,
 				contextWindow: entry.context_length ?? 1_000_000,
 				maxTokens: entry.max_output_tokens ?? 30_000,
-				...routeFor(entry.id),
 			});
 		}
 	}
 
-	// Append hardcoded models the live response omitted, applying proxy routing
-	// so a model that joins the proxy catalog later moves to the proxy path.
+	// Append hardcoded models the live response omitted.
 	for (const fb of base) {
-		if (!seen.has(fb.id)) {
-			merged.push({ ...fb, ...routeFor(fb.id) });
-		}
+		if (!seen.has(fb.id)) merged.push(fb);
 	}
 
 	return merged;
@@ -287,10 +289,9 @@ export function mergeLiveModels(
 export async function fetchLiveModels(
 	accessToken: string,
 	baseUrl: string,
-	proxyIds: Set<string> = new Set(),
 ): Promise<XaiModelConfig[] | null> {
 	const body = await fetchLiveCatalog(accessToken, baseUrl);
-	return body ? mergeLiveModels(FALLBACK_MODELS, body, proxyIds) : null;
+	return body ? mergeLiveModels(FALLBACK_MODELS, body) : null;
 }
 
 /** Fetch and return the raw `/models` body, or null on any failure. */
@@ -316,16 +317,14 @@ async function fetchLiveCatalog(
 // ─── Discovery cache ─────────────────────────────────────────────────────────
 
 /**
- * Raw `/models` body from the last successful live fetch, plus the set of
- * ids the CLI proxy catalog reported as available.
+ * Raw `/models` body from the last successful live fetch.
  *
  * Storing the raw body (rather than pre-merged configs) keeps the cache
  * decoupled from the fallback list, so a future `FALLBACK_MODELS` update
- * changes how the cache re-merges without a refetch. The proxy id set drives
- * proxy-preferred routing at merge time.
+ * changes how the cache re-merges without a refetch. Discovery is enrichment
+ * only; routing is static and owned by `rebuildModelsForOAuth`.
  */
 let discoveredBody: { data?: ApiModelEntry[] } | null = null;
-let discoveredProxyIds: Set<string> = new Set();
 let discoveryInFlight: Promise<void> | null = null;
 
 /**
@@ -333,7 +332,7 @@ let discoveryInFlight: Promise<void> | null = null;
  * when no successful fetch has completed, so callers always get a usable list.
  */
 export function mergeDiscoveredModels(base: XaiModelConfig[]): XaiModelConfig[] {
-	return discoveredBody ? mergeLiveModels(base, discoveredBody, discoveredProxyIds) : base;
+	return discoveredBody ? mergeLiveModels(base, discoveredBody) : base;
 }
 
 /**
@@ -352,29 +351,21 @@ export function applyDiscoveredModels(
 }
 
 /**
- * Fire-and-forget live catalog fetches for both endpoints.
+ * Fire-and-forget live catalog fetch.
  *
- * Fetches the public `/models` catalog (the source of discovered ids and the
- * authoritative context window / max-token fields) and the CLI proxy catalog
- * (the source of routing: ids present here ride the subscription path).
+ * Fetches the public `/models` catalog for enrichment: discovered ids and
+ * authoritative context window / max-token fields. Routing is static (every
+ * OAuth model rides the CLI proxy via `rebuildModelsForOAuth`), so the proxy
+ * catalog is not fetched here.
  *
  * Deduplicates concurrent calls so repeated `/reload`s don't stack requests.
- * Errors are swallowed (a failed fetch leaves that side of the cache as-is;
- * routing falls back to the public API when the proxy catalog is unavailable).
+ * Errors are swallowed (a failed fetch leaves the cache as-is).
  */
 export function triggerDiscovery(accessToken: string, baseUrl: string): void {
 	if (discoveryInFlight) return;
 	discoveryInFlight = (async () => {
-		const [body, proxyBody] = await Promise.all([
-			fetchLiveCatalog(accessToken, baseUrl),
-			fetchLiveCatalog(accessToken, CLI_PROXY_BASE_URL),
-		]);
+		const body = await fetchLiveCatalog(accessToken, baseUrl);
 		if (body && Array.isArray(body.data)) discoveredBody = body;
-		if (proxyBody && Array.isArray(proxyBody.data)) {
-			discoveredProxyIds = new Set(
-				proxyBody.data.filter((e) => isChatModelEntry(e.id)).map((e) => e.id),
-			);
-		}
 		discoveryInFlight = null;
 	})();
 }
@@ -382,7 +373,6 @@ export function triggerDiscovery(accessToken: string, baseUrl: string): void {
 /** Clear the discovery cache. For tests only. */
 export function resetDiscoveryForTests(): void {
 	discoveredBody = null;
-	discoveredProxyIds = new Set();
 	discoveryInFlight = null;
 }
 
@@ -390,17 +380,17 @@ export function resetDiscoveryForTests(): void {
  * Rebuild the full model list for `modifyModels`.
  *
  * - Keeps non-provider models untouched
- * - Merges live discovery into this provider's models
+ * - Merges live discovery into this provider's models (enrichment only)
  * - Re-applies `PI_XAI_OAUTH_MODELS`
  * - Appends newly discovered ids (map-only rewrites drop them)
  * - Stamps `api` / `provider` on entries that lack them
- * - Fills `baseUrl` from the provider default when unset (public API path);
- *   CLI-proxy models already carry their own baseUrl and keep it
+ * - Routes every OAuth model through the CLI proxy with the proxy header
+ *   set, so subscription inference rides the proxy from the first load
+ *   rather than the billed public API.
  */
 export function rebuildModelsForOAuth(
 	allModels: Array<Record<string, unknown>>,
 	provider: string,
-	effectiveBaseUrl: string,
 	envIds: string[] = envModelIds(),
 ): Array<Record<string, unknown>> {
 	const others = allModels.filter((m) => m.provider !== provider);
@@ -416,7 +406,8 @@ export function rebuildModelsForOAuth(
 			...row,
 			api: row.api ?? (template?.api as string | undefined) ?? "openai-responses",
 			provider: row.provider ?? provider,
-			baseUrl: row.baseUrl ?? effectiveBaseUrl,
+			baseUrl: CLI_PROXY_BASE_URL,
+			headers: CLI_PROXY_HEADERS,
 		};
 	});
 

@@ -3,6 +3,7 @@ import {
 	COST_45,
 	FALLBACK_MODELS,
 	CLI_PROXY_BASE_URL as CLI_PROXY_URL,
+	CLI_PROXY_HEADERS,
 	applyDiscoveredModels,
 	filterModelsByEnv,
 	mergeDiscoveredModels,
@@ -23,15 +24,28 @@ describe("FALLBACK_MODELS", () => {
 		expect(m?.contextWindow).toBe(500_000);
 	});
 
-	it("does not set a CLI proxy baseUrl for grok-4.5", () => {
-		const m = FALLBACK_MODELS.find((x) => x.id === "grok-4.5")!;
-		expect(m.baseUrl).toBeUndefined();
+	it("carries no routing hints (routing is owned by rebuildModelsForOAuth)", () => {
+		// FALLBACK is model metadata only. baseUrl/headers are stamped at rebuild
+		// time so every OAuth model rides the CLI proxy uniformly.
+		for (const m of FALLBACK_MODELS) {
+			expect(m.baseUrl).toBeUndefined();
+			expect(m.headers).toBeUndefined();
+		}
 	});
+});
 
-	it("keeps composer on the CLI proxy", () => {
-		const m = FALLBACK_MODELS.find((x) => x.id === "grok-composer-2.5-fast")!;
-		expect(m.baseUrl).toBe(CLI_PROXY_URL);
-		expect(m.headers).toBeDefined();
+describe("CLI_PROXY_HEADERS", () => {
+	it("carries the client identity, version, mode, and auth headers the proxy expects", () => {
+		// User-Agent and client identifier identify the client product; the
+		// version gate, mode label, and the two auth-middleware headers mark
+		// an OAuth CLI session. No surface header.
+		expect(CLI_PROXY_HEADERS["x-grok-client-identifier"]).toBe("grok-shell");
+		expect(CLI_PROXY_HEADERS["User-Agent"]).toMatch(/^grok-shell\/0\.2\.101 \((macos|windows|linux); (aarch64|x86_64)\)$/);
+		expect(CLI_PROXY_HEADERS["x-grok-client-version"]).toBe("0.2.101");
+		expect(CLI_PROXY_HEADERS["x-grok-client-mode"]).toBe("interactive");
+		expect(CLI_PROXY_HEADERS["X-XAI-Token-Auth"]).toBe("xai-grok-cli");
+		expect(CLI_PROXY_HEADERS["x-authenticateresponse"]).toBe("authenticate-response");
+		expect(CLI_PROXY_HEADERS["x-grok-client-surface"]).toBeUndefined();
 	});
 });
 
@@ -115,33 +129,21 @@ describe("mergeLiveModels", () => {
 		expect(m.cost).toEqual(COST_45);
 	});
 
-	it("does not route a known public-API model to the CLI proxy", () => {
-		// grok-4.5 lives on api.x.ai, so a discovery hit must not overwrite
-		// its baseUrl with the CLI proxy URL.
+	it("does not set routing: merge is enrichment only", () => {
+		// Routing is owned by rebuildModelsForOAuth. A discovered id carries no
+		// baseUrl/headers here, regardless of which endpoint reported it.
 		const merged = mergeLiveModels(base, {
 			data: [{ id: "grok-4.5", context_length: 500_000 }],
 		});
 		const m = merged.find((x) => x.id === "grok-4.5")!;
 		expect(m.baseUrl).toBeUndefined();
-	});
-
-	it("routes newly discovered models to the public API, not the CLI proxy", () => {
-		// Live /models is the public catalog, so new ids ride the provider base URL.
-		const merged = mergeLiveModels(base, {
-			data: [{ id: "grok-9-future", context_length: 100_000 }],
-		});
-		const m = merged.find((x) => x.id === "grok-9-future")!;
-		expect(m.baseUrl).toBeUndefined();
 		expect(m.headers).toBeUndefined();
-	});
 
-	it("preserves CLI-proxy routing for hardcoded models the live response omits", () => {
-		const merged = mergeLiveModels(base, {
-			data: [{ id: "grok-4.5" }],
-		});
-		const composer = merged.find((x) => x.id === "grok-composer-2.5-fast")!;
-		expect(composer.baseUrl).toBe(CLI_PROXY_URL);
-		expect(composer.headers).toBeDefined();
+		const fresh = merged.find((x) => x.id === "grok-9-future" || undefined);
+		if (fresh) {
+			expect(fresh.baseUrl).toBeUndefined();
+			expect(fresh.headers).toBeUndefined();
+		}
 	});
 
 	it("filters out non-chat entries (embeddings, tts, grok-imagine)", () => {
@@ -169,54 +171,6 @@ describe("mergeLiveModels", () => {
 	});
 });
 
-describe("proxy-preferred routing", () => {
-	const base = FALLBACK_MODELS;
-
-	it("routes a proxy-available model through the CLI proxy", () => {
-		// grok-4.5 is on both endpoints; proxy availability wins routing.
-		const merged = mergeLiveModels(
-			base,
-			{ data: [{ id: "grok-4.5", context_length: 500_000 }] },
-			new Set(["grok-4.5"]),
-		);
-		const m = merged.find((x) => x.id === "grok-4.5")!;
-		expect(m.baseUrl).toBe(CLI_PROXY_URL);
-		expect(m.headers).toBeDefined();
-	});
-
-	it("routes a newly discovered proxy-available id through the CLI proxy", () => {
-		const merged = mergeLiveModels(
-			base,
-			{ data: [{ id: "grok-9-future", context_length: 2_000_000 }] },
-			new Set(["grok-9-future"]),
-		);
-		const m = merged.find((x) => x.id === "grok-9-future")!;
-		expect(m.baseUrl).toBe(CLI_PROXY_URL);
-		expect(m.headers).toBeDefined();
-	});
-
-	it("keeps a model on the public API when the proxy catalog omits it", () => {
-		const merged = mergeLiveModels(
-			base,
-			{ data: [{ id: "grok-4.5", context_length: 500_000 }] },
-			new Set(), // proxy catalog empty
-		);
-		const m = merged.find((x) => x.id === "grok-4.5")!;
-		expect(m.baseUrl).toBeUndefined();
-		expect(m.headers).toBeUndefined();
-	});
-
-	it("falls back to the public API when no proxy set is provided", () => {
-		// Back-compat: callers that don't pass a proxy set get public-API routing.
-		const merged = mergeLiveModels(
-			base,
-			{ data: [{ id: "grok-4.5", context_length: 500_000 }] },
-		);
-		const m = merged.find((x) => x.id === "grok-4.5")!;
-		expect(m.baseUrl).toBeUndefined();
-	});
-});
-
 describe("applyDiscoveredModels + env filter", () => {
 	beforeEach(() => {
 		resetDiscoveryForTests();
@@ -227,18 +181,13 @@ describe("applyDiscoveredModels + env filter", () => {
 	});
 
 	it("re-applies the env filter after discovery so new ids stay out", () => {
-		// Seed the cache as if a live fetch already completed.
 		const body = {
 			data: [
 				{ id: "grok-4.5", context_length: 500_000 },
 				{ id: "grok-9-future", context_length: 2_000_000 },
 			],
 		};
-		// Use mergeLiveModels path via a direct cache inject through rebuild would
-		// need the module cache; seed via triggerDiscovery-style by calling
-		// applyDiscoveredModels against a merge of a known body instead.
 		const base = FALLBACK_MODELS.filter((m) => m.id === "grok-build");
-		// Simulate "cache has body" by testing filterModelsByEnv on a merge.
 		const merged = mergeLiveModels(base, body);
 		const filtered = filterModelsByEnv(merged, ["grok-build"]);
 		expect(filtered.map((m) => m.id)).toEqual(["grok-build"]);
@@ -277,83 +226,65 @@ describe("rebuildModelsForOAuth", () => {
 		...m,
 		provider: "xai-oauth",
 		api: "openai-responses",
-		// Registered models have baseUrl filled for public ones; CLI proxy keeps its own.
-		baseUrl: m.baseUrl ?? "https://api.x.ai/v1",
 	}));
 
-	it("preserves non-provider models", () => {
-		const result = rebuildModelsForOAuth(
-			[foreign, ...ours] as Array<Record<string, unknown>>,
-			"xai-oauth",
-			"https://api.x.ai/v1",
-			[],
-		);
-		expect(result.some((m) => m.provider === "anthropic" && m.id === "claude-sonnet")).toBe(true);
-	});
-
-	it("appends a newly discovered id and stamps api/provider", () => {
-		// Inject discovery by merging a live body into the cache via the pure path
-		// then calling rebuild after seeding discoveredBody through triggerDiscovery.
-		// For a deterministic unit test without network, exercise the pure merge
-		// contract that rebuild uses: filterModelsByEnv(mergeLiveModels(...)).
-		const liveBody = {
-			data: [
-				{ id: "grok-4.5", context_length: 500_000, max_output_tokens: 30_000 },
-				{ id: "grok-9-future", context_length: 2_000_000, max_output_tokens: 64_000 },
-			],
-		};
-		const merged = mergeLiveModels(ours as any, liveBody);
-		const rebuilt = [
-			foreign,
-			...merged.map((m) => ({
-				...m,
-				api: (m as any).api ?? "openai-responses",
-				provider: (m as any).provider ?? "xai-oauth",
-				baseUrl: m.baseUrl ?? "https://api.x.ai/v1",
-			})),
-		];
-
-		const future = rebuilt.find((m) => m.id === "grok-9-future") as any;
-		expect(future).toBeDefined();
-		expect(future.provider).toBe("xai-oauth");
-		expect(future.api).toBe("openai-responses");
-		expect(future.baseUrl).toBe("https://api.x.ai/v1");
-		// Foreign provider still present.
-		expect(rebuilt.some((m) => m.provider === "anthropic")).toBe(true);
-	});
-
-	it("keeps CLI-proxy baseUrl on composer after rebuild", () => {
+	it("routes every OAuth model through the CLI proxy with the proxy headers", () => {
+		// Subscription inference always rides the proxy. Every provider model
+		// gets the proxy baseUrl + header set, regardless of what FALLBACK or
+		// discovery carried.
 		const result = rebuildModelsForOAuth(
 			[...ours] as Array<Record<string, unknown>>,
 			"xai-oauth",
-			"https://api.x.ai/v1",
-			[],
 		);
-		const composer = result.find((m) => m.id === "grok-composer-2.5-fast")!;
-		expect(composer.baseUrl).toBe(CLI_PROXY_URL);
+		for (const m of result as Array<Record<string, unknown>>) {
+			expect(m.baseUrl).toBe(CLI_PROXY_URL);
+			expect(m.headers).toEqual(CLI_PROXY_HEADERS);
+		}
 	});
 
-	it("fills public baseUrl when unset", () => {
+	it("routes grok-4.5 through the proxy on the first load (no discovery needed)", () => {
+		// This is the regression guard for the timing bug: before this fix,
+		// grok-4.5 stayed on api.x.ai until background discovery completed.
 		const bare = FALLBACK_MODELS
 			.filter((m) => m.id === "grok-4.5")
 			.map((m) => ({ ...m, provider: "xai-oauth", api: "openai-responses" }));
 		const result = rebuildModelsForOAuth(
 			bare as Array<Record<string, unknown>>,
 			"xai-oauth",
-			"https://api.x.ai/v1",
-			[],
 		);
-		expect(result[0].baseUrl).toBe("https://api.x.ai/v1");
+		expect(result[0].baseUrl).toBe(CLI_PROXY_URL);
+		expect(result[0].headers).toEqual(CLI_PROXY_HEADERS);
+	});
+
+	it("stamps api/provider on entries that lack them", () => {
+		const result = rebuildModelsForOAuth(
+			[...ours] as Array<Record<string, unknown>>,
+			"xai-oauth",
+		);
+		for (const m of result as Array<Record<string, unknown>>) {
+			expect(m.api).toBe("openai-responses");
+			expect(m.provider).toBe("xai-oauth");
+		}
+	});
+
+	it("preserves non-provider models untouched", () => {
+		const result = rebuildModelsForOAuth(
+			[foreign, ...ours] as Array<Record<string, unknown>>,
+			"xai-oauth",
+		);
+		const claude = result.find((m) => (m as any).id === "claude-sonnet") as any;
+		expect(claude).toBeDefined();
+		expect(claude.provider).toBe("anthropic");
+		expect(claude.baseUrl).toBe("https://api.anthropic.com");
 	});
 
 	it("re-applies env filter so discovery cannot bypass PI_XAI_OAUTH_MODELS", () => {
 		const result = rebuildModelsForOAuth(
 			ours as Array<Record<string, unknown>>,
 			"xai-oauth",
-			"https://api.x.ai/v1",
 			["grok-build", "grok-4.5"],
 		);
-		expect(result.map((m) => m.id)).toEqual(["grok-build", "grok-4.5"]);
+		expect(result.map((m) => (m as any).id)).toEqual(["grok-build", "grok-4.5"]);
 	});
 });
 
@@ -366,21 +297,17 @@ describe("discovery cache", () => {
 			if (!u.endsWith("/models")) {
 				return new Response("not found", { status: 404 });
 			}
-			// Public API returns the full catalog; CLI proxy returns a subset.
-			// Models on both endpoints route through the proxy (subscription path).
-			const isProxy = u.startsWith(CLI_PROXY_URL);
-			const data = isProxy
-				? [
-					{ id: "grok-4.5", context_length: 500_000, max_output_tokens: 30_000 },
-				]
-				: [
-					{ id: "grok-4.5", context_length: 500_000, max_output_tokens: 30_000 },
-					{ id: "grok-9-future", context_length: 2_000_000, max_output_tokens: 64_000 },
-				];
-			return new Response(JSON.stringify({ data }), {
-				status: 200,
-				headers: { "Content-Type": "application/json" },
-			});
+			// The proxy catalog is no longer fetched; discovery hits the public
+			// catalog only, for enrichment (context windows, new ids).
+			return new Response(
+				JSON.stringify({
+					data: [
+						{ id: "grok-4.5", context_length: 500_000, max_output_tokens: 30_000 },
+						{ id: "grok-9-future", context_length: 2_000_000, max_output_tokens: 64_000 },
+					],
+				}),
+				{ status: 200, headers: { "Content-Type": "application/json" } },
+			);
 		}) as typeof fetch;
 	});
 
@@ -402,10 +329,8 @@ describe("discovery cache", () => {
 		expect(before).toEqual(FALLBACK_MODELS);
 	});
 
-	it("surfaces discovered models after a successful fetch", async () => {
+	it("surfaces discovered models after a successful fetch (enrichment only)", async () => {
 		triggerDiscovery("token", "https://api.x.ai/v1");
-		// triggerDiscovery is fire-and-forget; poll the merge until the
-		// discovered id appears (with a hard timeout).
 		let merged = mergeDiscoveredModels(FALLBACK_MODELS);
 		const deadline = Date.now() + 2000;
 		while (!merged.some((m) => m.id === "grok-9-future") && Date.now() < deadline) {
@@ -415,16 +340,12 @@ describe("discovery cache", () => {
 		const future = merged.find((m) => m.id === "grok-9-future");
 		expect(future).toBeDefined();
 		expect(future?.contextWindow).toBe(2_000_000);
-		// grok-9-future is on the public catalog only, so it rides the public API.
+		// Enrichment sets no routing; rebuild owns baseUrl/headers.
 		expect(future?.baseUrl).toBeUndefined();
-		// grok-4.5 is on both endpoints; proxy-preferred routing sends it to
-		// the CLI proxy.
-		const g45 = merged.find((m) => m.id === "grok-4.5")!;
-		expect(g45.baseUrl).toBe(CLI_PROXY_URL);
-		expect(g45.headers).toBeDefined();
+		expect(future?.headers).toBeUndefined();
 	});
 
-	it("rebuildModelsForOAuth appends discovered ids once the cache is warm", async () => {
+	it("rebuild routes discovered ids through the proxy once the cache is warm", async () => {
 		triggerDiscovery("token", "https://api.x.ai/v1");
 		const deadline = Date.now() + 2000;
 		while (!mergeDiscoveredModels(FALLBACK_MODELS).some((m) => m.id === "grok-9-future") && Date.now() < deadline) {
@@ -435,7 +356,6 @@ describe("discovery cache", () => {
 			...m,
 			provider: "xai-oauth",
 			api: "openai-responses",
-			baseUrl: m.baseUrl ?? "https://api.x.ai/v1",
 		}));
 		const foreign = {
 			id: "other",
@@ -446,24 +366,22 @@ describe("discovery cache", () => {
 		const result = rebuildModelsForOAuth(
 			[foreign, ...ours] as Array<Record<string, unknown>>,
 			"xai-oauth",
-			"https://api.x.ai/v1",
-			[],
 		);
 
-		const future = result.find((m) => m.id === "grok-9-future") as any;
+		// A newly discovered id still rides the proxy, like every OAuth model.
+		const future = result.find((m) => (m as any).id === "grok-9-future") as any;
 		expect(future).toBeDefined();
 		expect(future.provider).toBe("xai-oauth");
 		expect(future.api).toBe("openai-responses");
-		// grok-9-future is public-catalog only → public API base URL.
-		expect(future.baseUrl).toBe("https://api.x.ai/v1");
-		// grok-4.5 is on both endpoints → routed through the CLI proxy.
-		const g45 = result.find((m) => m.id === "grok-4.5")!;
+		expect(future.baseUrl).toBe(CLI_PROXY_URL);
+		expect(future.headers).toEqual(CLI_PROXY_HEADERS);
+
+		// grok-4.5 through the proxy too.
+		const g45 = result.find((m) => (m as any).id === "grok-4.5") as any;
 		expect(g45.baseUrl).toBe(CLI_PROXY_URL);
-		expect(g45.headers).toBeDefined();
-		// Non-provider models pass through.
-		expect(result.some((m) => m.provider === "other")).toBe(true);
-		// CLI-proxy model still present with its own baseUrl.
-		const composer = result.find((m) => m.id === "grok-composer-2.5-fast")!;
-		expect(composer.baseUrl).toBe(CLI_PROXY_URL);
+
+		// Non-provider model passes through untouched.
+		const other = result.find((m) => (m as any).provider === "other") as any;
+		expect(other.baseUrl).toBe("https://example.com");
 	});
 });

@@ -65,16 +65,18 @@ Choose **Use a subscription**, select **xAI (SuperGrok Subscription)**. Approve 
 - **grok-4.20-0309-non-reasoning**
 - **grok-4.20-multi-agent-0309**
 
-On login, pi-grok fetches both xAI endpoints: `api.x.ai/v1/models`
-(public catalog) and the CLI chat proxy `cli-chat-proxy.grok.com/v1/models`
-(subscription catalog). The public catalog supplies discovered ids and
-authoritative context windows; the proxy catalog drives routing. Any model
-the proxy serves routes through the CLI chat proxy so requests ride your
-SuperGrok subscription quota instead of billed API credits. Models absent
-from the proxy fall back to `api.x.ai`. The first model load after login uses
-the fallback list; the catalogs populate in the background and the next
-`/reload` applies the new ids and routing. If a fetch fails, the fallback
-list is used and routing defaults to the public API.
+On login, pi-grok sends every OAuth model through the CLI chat proxy
+(`cli-chat-proxy.grok.com/v1`). The proxy maps each model to its subscription
+variant (for example `grok-4.5` becomes `grok-4.5-build`), so requests ride
+your SuperGrok subscription quota instead of billed API credits. Requests
+carry the client headers the proxy expects (`x-grok-client-version`,
+`x-grok-client-mode`, `X-XAI-Token-Auth`, `x-authenticateresponse`) so it
+recognizes the session.
+
+A background fetch of `api.x.ai/v1/models` enriches the model list with
+authoritative context windows and surfaces newly released ids, but it does
+not drive routing. If that fetch fails, the built-in list is used and routing
+stays on the proxy.
 
 Filter or reorder with `PI_XAI_OAUTH_MODELS`. The filter is re-applied after
 live discovery, so it still holds when new catalog ids arrive:
@@ -138,7 +140,7 @@ If your organization enforces Zero Data Retention, the choice is locked and
 | `PI_XAI_OAUTH_MODELS` | all models |
 | `PI_XAI_OAUTH_CALLBACK_PORT` | `56121` |
 | `PI_XAI_OAUTH_CLIENT_ID` | built-in |
-| `PI_XAI_CLIENT_VERSION` | `0.2.101` (matches shipped grok-build CLI) |
+| `PI_XAI_CLIENT_VERSION` | `0.2.101` (client version label sent to the proxy) |
 | `XAI_OAUTH_TOKEN` | skip OAuth, use raw token (no refresh, no discovery) |
 | `PI_XAI_X_SEARCH` | `true` |
 | `PI_XAI_X_SEARCH_MODEL` | `grok-4.5` |
@@ -189,7 +191,7 @@ pi-grok/
 
 - **Payload sanitization via `before_provider_request`** - decoupled from streaming, visible to other extensions, chainable.
 - **X Search tool** - proxy via `pi.registerTool`. Any model can search X. Per-query parameters supported.
-- **Live model catalog** - fetches `api.x.ai/v1/models` on login, merges with built-in list so new Grok releases appear without an extension update.
+- **Live model catalog** - fetches `api.x.ai/v1/models` on login for enrichment (context windows, new ids); routing always sends OAuth inference through the CLI chat proxy so requests ride the SuperGrok quota.
 - **Account + privacy commands** - `/xai-status` reads the cli-chat-proxy `/user` enrichment for account and retention state; `/xai-privacy` opens an inline themed picker (green-tick current row, matching the login selector) that toggles coding-data-retention via `PUT /privacy/coding-data-retention`.
 - **Typed errors** - `XaiOAuthError` with machine-readable codes for distinguishing retryable vs fatal failures.
 - **Web Crypto** - `crypto.subtle` for PKCE.

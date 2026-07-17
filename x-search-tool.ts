@@ -12,7 +12,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { CLI_PROXY_HEADERS } from "./models.js";
+import { CLI_PROXY_BASE_URL, CLI_PROXY_HEADERS } from "./models.js";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -148,10 +148,9 @@ export function registerXSearchTool(pi: ExtensionAPI) {
 				};
 			}
 
-			// Resolve base URL; prefer the provider's configured URL.
-			const allModels = ctx.modelRegistry.getAll();
-			const xaiModel = allModels.find((m) => m.provider === "xai-oauth");
-			const baseUrl = (xaiModel?.baseUrl ?? "https://api.x.ai/v1").replace(/\/+$/, "");
+			// X search rides the cli-chat-proxy so the call uses the same
+			// subscription path as inference.
+			const baseUrl = CLI_PROXY_BASE_URL;
 
 			const result = await callXSearch(
 				apiKey,
