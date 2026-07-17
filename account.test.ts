@@ -11,7 +11,7 @@ import {
 } from "./account.js";
 import type { XaiUser } from "./account.js";
 import { XaiErrorCode, XaiOAuthError } from "./errors.js";
-import { CLI_PROXY_BASE_URL, CLI_PROXY_HEADERS } from "./models.js";
+import { CLI_PROXY_BASE_URL, buildProxyHeaders } from "./models.js";
 
 // ─── parsePrivacyArg ─────────────────────────────────────────────────────────
 
@@ -255,7 +255,7 @@ describe("fetchUser", () => {
 			expect.objectContaining({
 				headers: expect.objectContaining({
 					Authorization: "Bearer tok",
-					"X-XAI-Token-Auth": CLI_PROXY_HEADERS["X-XAI-Token-Auth"],
+					"X-XAI-Token-Auth": buildProxyHeaders()["X-XAI-Token-Auth"],
 				}),
 			}),
 		);
@@ -322,7 +322,7 @@ describe("setCodingDataRetention", () => {
 				headers: expect.objectContaining({
 					Authorization: "Bearer tok",
 					"Content-Type": "application/json",
-					"X-XAI-Token-Auth": CLI_PROXY_HEADERS["X-XAI-Token-Auth"],
+					"X-XAI-Token-Auth": buildProxyHeaders()["X-XAI-Token-Auth"],
 				}),
 			}),
 		);

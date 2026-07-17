@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CLI_PROXY_HEADERS } from "./models.js";
+import { buildProxyHeaders } from "./models.js";
 import { XSearchHttpError, callXSearch } from "./x-search-tool.js";
 
 const OK_RESPONSE = {
@@ -45,7 +45,11 @@ describe("callXSearch", () => {
 		expect(url).toBe("https://cli-chat-proxy.grok.com/v1/responses");
 		expect(init.method).toBe("POST");
 		expect(init.headers.Authorization).toBe("Bearer tok");
-		expect(init.headers["X-XAI-Token-Auth"]).toBe(CLI_PROXY_HEADERS["X-XAI-Token-Auth"]);
+		expect(init.headers["X-XAI-Token-Auth"]).toBe(buildProxyHeaders()["X-XAI-Token-Auth"]);
+		// The search model is carried as the proxy's model-override header.
+		expect(init.headers["x-grok-model-override"]).toBe(
+			process.env.PI_XAI_X_SEARCH_MODEL ?? "grok-4.5",
+		);
 	});
 
 	it("extracts answer text and citations", async () => {

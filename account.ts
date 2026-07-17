@@ -12,7 +12,7 @@
  */
 
 import { XaiErrorCode, XaiOAuthError } from "./errors.js";
-import { CLI_PROXY_BASE_URL, CLI_PROXY_HEADERS } from "./models.js";
+import { CLI_PROXY_BASE_URL, buildProxyHeaders } from "./models.js";
 
 /** Request timeout for proxy calls. Account reads should feel instant. */
 const PROXY_TIMEOUT_MS = 10_000;
@@ -55,7 +55,7 @@ function proxyHeaders(token: string, json: boolean): Record<string, string> {
 	return {
 		Authorization: `Bearer ${token}`,
 		...(json ? { "Content-Type": "application/json" } : {}),
-		...CLI_PROXY_HEADERS,
+		...buildProxyHeaders(),
 	};
 }
 

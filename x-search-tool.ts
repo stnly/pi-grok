@@ -12,7 +12,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { CLI_PROXY_BASE_URL, CLI_PROXY_HEADERS } from "./models.js";
+import { CLI_PROXY_BASE_URL, buildProxyHeaders } from "./models.js";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -65,7 +65,7 @@ export async function callXSearch(
 		headers: {
 			"Content-Type": "application/json",
 			Authorization: `Bearer ${apiKey}`,
-			...CLI_PROXY_HEADERS,
+			...buildProxyHeaders(SEARCH_MODEL),
 		},
 		body: JSON.stringify(payload),
 		// Bound the call so a stalled proxy never wedges the tool. Combine the

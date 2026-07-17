@@ -62,20 +62,27 @@ function platformLabel(): string {
 }
 
 /**
- * Headers every cli-chat-proxy request carries: the User-Agent and client
- * identifier, the version its gate checks, the mode label, and the two
- * auth-middleware headers that tell the proxy this is an OAuth CLI session.
- * Reused by inference, model discovery, account, privacy, and x-search so
- * every proxy request carries the same identity.
+ * Identity headers for a cli-chat-proxy request: the User-Agent and client
+ * identifier, the version the proxy's gate checks, the mode label, and the two
+ * auth-middleware headers that mark an OAuth CLI session. When `modelId` is
+ * given (an inference request), `x-grok-model-override` is added so the proxy
+ * routes to that model; account and catalog calls omit it.
+ *
+ * Returns a fresh object per call so callers can safely add per-request keys
+ * (Authorization, Content-Type) without aliasing a shared constant.
  */
-export const CLI_PROXY_HEADERS: Record<string, string> = Object.freeze({
-	"User-Agent": `${CLIENT_IDENTIFIER}/${GROK_CLIENT_VERSION} (${platformLabel()})`,
-	"x-grok-client-identifier": CLIENT_IDENTIFIER,
-	"x-grok-client-version": GROK_CLIENT_VERSION,
-	"x-grok-client-mode": "interactive",
-	"X-XAI-Token-Auth": "xai-grok-cli",
-	"x-authenticateresponse": "authenticate-response",
-});
+export function buildProxyHeaders(modelId?: string): Record<string, string> {
+	const headers: Record<string, string> = {
+		"User-Agent": `${CLIENT_IDENTIFIER}/${GROK_CLIENT_VERSION} (${platformLabel()})`,
+		"x-grok-client-identifier": CLIENT_IDENTIFIER,
+		"x-grok-client-version": GROK_CLIENT_VERSION,
+		"x-grok-client-mode": "interactive",
+		"X-XAI-Token-Auth": "xai-grok-cli",
+		"x-authenticateresponse": "authenticate-response",
+	};
+	if (modelId) headers["x-grok-model-override"] = modelId;
+	return headers;
+}
 
 export const FALLBACK_MODELS: XaiModelConfig[] = [
 	{
@@ -324,7 +331,7 @@ async function fetchLiveCatalog(
 		const response = await fetch(`${baseUrl}/models`, {
 			headers: {
 				Authorization: `Bearer ${accessToken}`,
-				...CLI_PROXY_HEADERS,
+				...buildProxyHeaders(),
 			},
 			signal: AbortSignal.timeout(10_000),
 		});
@@ -471,7 +478,7 @@ export function rebuildModelsForOAuth(
 			api: row.api ?? (template?.api as string | undefined) ?? "openai-responses",
 			provider: row.provider ?? provider,
 			baseUrl: CLI_PROXY_BASE_URL,
-			headers: { ...CLI_PROXY_HEADERS },
+			headers: buildProxyHeaders(row.id),
 			...(thinkingLevelMap ? { thinkingLevelMap } : {}),
 		};
 	});

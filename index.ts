@@ -27,7 +27,7 @@ import {
 	triggerDiscovery,
 	discoveryStatus,
 	CLI_PROXY_BASE_URL,
-	CLI_PROXY_HEADERS,
+	buildProxyHeaders,
 	type XaiModelConfig,
 } from "./models.js";
 import {
@@ -145,7 +145,7 @@ export default function (pi: ExtensionAPI) {
 			// path re-stamps this in rebuildModelsForOAuth, including discovered
 			// ids the registration map never saw.
 			baseUrl: CLI_PROXY_BASE_URL,
-			headers: { ...CLI_PROXY_HEADERS },
+			headers: buildProxyHeaders(m.id),
 		})),
 		oauth: oauthConfig,
 

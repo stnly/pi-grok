@@ -3,7 +3,7 @@ import {
 	COST_45,
 	FALLBACK_MODELS,
 	CLI_PROXY_BASE_URL as CLI_PROXY_URL,
-	CLI_PROXY_HEADERS,
+	buildProxyHeaders,
 	applyDiscoveredModels,
 	filterModelsByEnv,
 	mergeDiscoveredModels,
@@ -49,18 +49,31 @@ describe("FALLBACK_MODELS", () => {
 	});
 });
 
-describe("CLI_PROXY_HEADERS", () => {
+describe("buildProxyHeaders", () => {
 	it("carries the client identity, version, mode, and auth headers the proxy expects", () => {
+		const h = buildProxyHeaders();
 		// User-Agent and client identifier identify the client product; the
 		// version gate, mode label, and the two auth-middleware headers mark
 		// an OAuth CLI session. No surface header.
-		expect(CLI_PROXY_HEADERS["x-grok-client-identifier"]).toBe("grok-shell");
-		expect(CLI_PROXY_HEADERS["User-Agent"]).toMatch(/^grok-shell\/0\.2\.101 \((macos|windows|linux); (aarch64|x86_64)\)$/);
-		expect(CLI_PROXY_HEADERS["x-grok-client-version"]).toBe("0.2.101");
-		expect(CLI_PROXY_HEADERS["x-grok-client-mode"]).toBe("interactive");
-		expect(CLI_PROXY_HEADERS["X-XAI-Token-Auth"]).toBe("xai-grok-cli");
-		expect(CLI_PROXY_HEADERS["x-authenticateresponse"]).toBe("authenticate-response");
-		expect(CLI_PROXY_HEADERS["x-grok-client-surface"]).toBeUndefined();
+		expect(h["x-grok-client-identifier"]).toBe("grok-shell");
+		expect(h["User-Agent"]).toMatch(/^grok-shell\/0\.2\.101 \((macos|windows|linux); (aarch64|x86_64)\)$/);
+		expect(h["x-grok-client-version"]).toBe("0.2.101");
+		expect(h["x-grok-client-mode"]).toBe("interactive");
+		expect(h["X-XAI-Token-Auth"]).toBe("xai-grok-cli");
+		expect(h["x-authenticateresponse"]).toBe("authenticate-response");
+		expect(h["x-grok-client-surface"]).toBeUndefined();
+	});
+
+	it("omits x-grok-model-override for non-inference calls", () => {
+		expect(buildProxyHeaders()["x-grok-model-override"]).toBeUndefined();
+	});
+
+	it("adds x-grok-model-override for an inference model", () => {
+		expect(buildProxyHeaders("grok-4.5")["x-grok-model-override"]).toBe("grok-4.5");
+	});
+
+	it("returns a fresh object per call (no shared reference)", () => {
+		expect(buildProxyHeaders()).not.toBe(buildProxyHeaders());
 	});
 });
 
@@ -287,7 +300,7 @@ describe("rebuildModelsForOAuth", () => {
 		);
 		for (const m of result as Array<Record<string, unknown>>) {
 			expect(m.baseUrl).toBe(CLI_PROXY_URL);
-			expect(m.headers).toEqual(CLI_PROXY_HEADERS);
+			expect(m.headers).toEqual(buildProxyHeaders(m.id as string));
 		}
 	});
 
@@ -302,7 +315,7 @@ describe("rebuildModelsForOAuth", () => {
 			"xai-oauth",
 		);
 		expect(result[0].baseUrl).toBe(CLI_PROXY_URL);
-		expect(result[0].headers).toEqual(CLI_PROXY_HEADERS);
+		expect(result[0].headers).toEqual(buildProxyHeaders("grok-4.5"));
 	});
 
 	it("stamps api/provider on entries that lack them", () => {
@@ -493,7 +506,7 @@ describe("discovery cache", () => {
 		expect(future.provider).toBe("xai-oauth");
 		expect(future.api).toBe("openai-responses");
 		expect(future.baseUrl).toBe(CLI_PROXY_URL);
-		expect(future.headers).toEqual(CLI_PROXY_HEADERS);
+		expect(future.headers).toEqual(buildProxyHeaders("grok-9-future"));
 
 		// grok-4.5 through the proxy too.
 		const g45 = result.find((m) => (m as any).id === "grok-4.5") as any;
