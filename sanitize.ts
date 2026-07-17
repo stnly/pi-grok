@@ -301,13 +301,9 @@ export function sanitizePayload(
 
 	// ── Reasoning effort ──────────────────────────────────────────────────
 	if (supportsReasoningEffort(modelId)) {
-		// This model supports the effort dial; remap 'minimal' to 'low'
-		// (xAI doesn't have a 'minimal' level).
+		// This model supports the effort dial. Strip `summary`; xAI doesn't
+		// support it. The effort value (including 'minimal') passes through.
 		const reasoning = next.reasoning as Record<string, unknown> | undefined;
-		if (reasoning && reasoning.effort === "minimal") {
-			next.reasoning = { ...reasoning, effort: "low" };
-		}
-		// Strip `summary`; xAI doesn't support it.
 		if (reasoning && reasoning.summary !== undefined) {
 			next.reasoning = { effort: reasoning.effort };
 		}

@@ -157,6 +157,24 @@ export function supportsReasoningEffort(modelId: string): boolean {
 	return EFFORT_CAPABLE_PREFIXES.some((p) => name.toLowerCase().startsWith(p));
 }
 
+/**
+ * Thinking-level map for a model. Effort-capable reasoning models reject
+ * `reasoning.effort: "none"` (the host's "thinking off" value), so hide
+ * "off" from the picker. The set mirrors what a native client exposes for
+ * these models: low, medium, high, xhigh. "off" and "minimal" are dropped
+ * (the model rejects none; minimal is not exposed), and xhigh is opted in
+ * (the host hides xhigh unless it is mapped to a non-null value). Returns
+ * undefined for non-reasoning or non-effort-capable models so an explicit
+ * map on the entry (or no map at all) is left untouched.
+ */
+export function thinkingLevelMapFor(
+	modelId: string,
+	reasoning: boolean,
+): Record<string, string | null> | undefined {
+	if (!reasoning || !supportsReasoningEffort(modelId)) return undefined;
+	return { off: null, minimal: null, xhigh: "xhigh" };
+}
+
 // ─── PI_XAI_OAUTH_MODELS env override ────────────────────────────────────────
 
 /** Parse `PI_XAI_OAUTH_MODELS` into a list of model ids (empty = no filter). */
@@ -402,12 +420,14 @@ export function rebuildModelsForOAuth(
 		envIds,
 	).map((m) => {
 		const row = m as XaiModelConfig & { api?: string; provider?: string };
+		const thinkingLevelMap = row.thinkingLevelMap ?? thinkingLevelMapFor(row.id, row.reasoning);
 		return {
 			...row,
 			api: row.api ?? (template?.api as string | undefined) ?? "openai-responses",
 			provider: row.provider ?? provider,
 			baseUrl: CLI_PROXY_BASE_URL,
 			headers: CLI_PROXY_HEADERS,
+			...(thinkingLevelMap ? { thinkingLevelMap } : {}),
 		};
 	});
 

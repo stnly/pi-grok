@@ -23,6 +23,7 @@ import { type XaiOAuthCredentials, getBaseUrl } from "./oauth.js";
 import {
 	resolveModels,
 	rebuildModelsForOAuth,
+	thinkingLevelMapFor,
 	triggerDiscovery,
 	type XaiModelConfig,
 } from "./models.js";
@@ -87,7 +88,7 @@ export default function (pi: ExtensionAPI) {
 			id: m.id,
 			name: m.name,
 			reasoning: m.reasoning,
-			thinkingLevelMap: m.thinkingLevelMap,
+			thinkingLevelMap: m.thinkingLevelMap ?? thinkingLevelMapFor(m.id, m.reasoning),
 			input: m.input,
 			cost: m.cost,
 			contextWindow: m.contextWindow,

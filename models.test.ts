@@ -11,6 +11,7 @@ import {
 	rebuildModelsForOAuth,
 	resetDiscoveryForTests,
 	supportsReasoningEffort,
+	thinkingLevelMapFor,
 	triggerDiscovery,
 } from "./models.js";
 
@@ -70,6 +71,26 @@ describe("supportsReasoningEffort", () => {
 
 	it("returns false for a model outside the allowlist", () => {
 		expect(supportsReasoningEffort("grok-4.20-0309-non-reasoning")).toBe(false);
+	});
+});
+
+describe("thinkingLevelMapFor", () => {
+	it("exposes low/medium/high/xhigh for an effort-capable reasoning model", () => {
+		expect(thinkingLevelMapFor("grok-4.5", true)).toEqual({ off: null, minimal: null, xhigh: "xhigh" });
+	});
+
+	it("honors a provider-qualified id", () => {
+		expect(thinkingLevelMapFor("xai-oauth/grok-4.3", true)).toEqual({ off: null, minimal: null, xhigh: "xhigh" });
+	});
+
+	it("returns undefined for a non-effort reasoning model", () => {
+		// grok-build is reasoning but not effort-capable; the sanitizer strips
+		// its reasoning field, so no picker change is needed.
+		expect(thinkingLevelMapFor("grok-build", true)).toBeUndefined();
+	});
+
+	it("returns undefined for a non-reasoning model", () => {
+		expect(thinkingLevelMapFor("grok-4.20-0309-non-reasoning", false)).toBeUndefined();
 	});
 });
 
@@ -265,6 +286,55 @@ describe("rebuildModelsForOAuth", () => {
 			expect(m.api).toBe("openai-responses");
 			expect(m.provider).toBe("xai-oauth");
 		}
+	});
+
+	it("hides off/minimal and enables xhigh on effort-capable OAuth models", () => {
+		// grok-4.5 rejects reasoning.effort "none" (the host's off value) and
+		// exposes low/medium/high/xhigh. rebuild stamps the map so the host
+		// picker offers that set and nothing the model rejects.
+		const result = rebuildModelsForOAuth(
+			[...ours] as Array<Record<string, unknown>>,
+			"xai-oauth",
+		);
+		const grok45 = result.find((m) => (m as any).id === "grok-4.5") as any;
+		expect(grok45.thinkingLevelMap).toEqual({ off: null, minimal: null, xhigh: "xhigh" });
+	});
+
+	it("stamps the off map on a discovered effort-capable model", () => {
+		// A live-catalog id absent from FALLBACK still needs the map so off
+		// is hidden once discovery adds it.
+		const discovered = {
+			...FALLBACK_MODELS[0],
+			id: "grok-4.5-preview",
+			name: "Grok 4.5 Preview",
+			reasoning: true,
+			provider: "xai-oauth",
+			api: "openai-responses",
+		};
+		const result = rebuildModelsForOAuth(
+			[discovered] as Array<Record<string, unknown>>,
+			"xai-oauth",
+		);
+		const found = result.find((m) => (m as any).id === "grok-4.5-preview") as any;
+		expect(found.thinkingLevelMap).toEqual({ off: null, minimal: null, xhigh: "xhigh" });
+	});
+
+	it("preserves an explicit thinkingLevelMap (non-reasoning model)", () => {
+		const result = rebuildModelsForOAuth(
+			[...ours] as Array<Record<string, unknown>>,
+			"xai-oauth",
+		);
+		const nonReasoning = result.find(
+			(m) => (m as any).id === "grok-4.20-0309-non-reasoning",
+		) as any;
+		expect(nonReasoning.thinkingLevelMap).toEqual({
+			off: "none",
+			minimal: null,
+			low: null,
+			medium: null,
+			high: null,
+			xhigh: null,
+		});
 	});
 
 	it("preserves non-provider models untouched", () => {
