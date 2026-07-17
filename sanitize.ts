@@ -263,6 +263,7 @@ export function sanitizePayload(
 	params: Record<string, unknown>,
 	modelId: string,
 	sessionId?: string,
+	reasons = false,
 ): Record<string, unknown> {
 	// Shallow-clone the top level so the host's payload object is never mutated
 	// in place. before_provider_request is a chain: later extensions, or the
@@ -340,13 +341,21 @@ export function sanitizePayload(
 		delete next.reasoning;
 	}
 
-	// ── Strip/filter unsupported fields ──────────────────────────────────
-	// xAI doesn't support reasoning.encrypted_content in include.
-	if (Array.isArray(next.include)) {
-		next.include = (next.include as unknown[]).filter(
-			(item) => item !== "reasoning.encrypted_content",
-		);
-		if ((next.include as unknown[]).length === 0) delete next.include;
+	// ── Encrypted reasoning replay ─────────────────────────────────────────
+	// The cli-chat-proxy honors `include: ["reasoning.encrypted_content"]` and
+	// returns an encrypted reasoning blob, which lets prior reasoning be
+	// replayed across turns without re-deriving it. Ensure it for reasoning
+	// models (the capability is passed in by the caller from the model entry);
+	// non-reasoning models produce no reasoning item either way, so the include
+	// is pointless there and is left untouched.
+	if (reasons) {
+		const want = "reasoning.encrypted_content";
+		const inc = next.include;
+		if (!Array.isArray(inc)) {
+			next.include = [want];
+		} else if (!inc.includes(want)) {
+			next.include = [...inc, want];
+		}
 	}
 
 	// xAI doesn't support prompt_cache_retention.

@@ -204,20 +204,33 @@ describe("sanitizePayload field rewrites", () => {
 		expect(p.response_format).toBeDefined();
 	});
 
-	it("strips reasoning.encrypted_content from include", () => {
-		const p = sanitizePayload(
-			{ ...basePayload(), include: ["reasoning.encrypted_content", "other"] },
-			"grok-4.5",
+	it("ensures reasoning.encrypted_content for a reasoning model", () => {
+		// Without an existing include, it is added.
+		const p = sanitizePayload({ ...basePayload() }, "grok-4.5", undefined, true);
+		expect(p.include).toEqual(["reasoning.encrypted_content"]);
+
+		// An existing include keeps its entries and appends the encrypted marker.
+		const withExisting = sanitizePayload(
+			{ ...basePayload(), include: ["other"] },
+			"grok-4.5", undefined, true,
 		);
-		expect(p.include).toEqual(["other"]);
+		expect(withExisting.include).toEqual(["other", "reasoning.encrypted_content"]);
 	});
 
-	it("drops include when it would be empty", () => {
+	it("does not duplicate reasoning.encrypted_content when already present", () => {
 		const p = sanitizePayload(
 			{ ...basePayload(), include: ["reasoning.encrypted_content"] },
-			"grok-4.5",
+			"grok-4.5", undefined, true,
 		);
-		expect(p.include).toBeUndefined();
+		expect(p.include).toEqual(["reasoning.encrypted_content"]);
+	});
+
+	it("leaves include untouched for a non-reasoning model", () => {
+		const p = sanitizePayload(
+			{ ...basePayload(), include: ["other"] },
+			"grok-4.20-0309-non-reasoning", undefined, false,
+		);
+		expect(p.include).toEqual(["other"]);
 	});
 
 	it("deletes prompt_cache_retention", () => {

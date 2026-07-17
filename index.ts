@@ -158,7 +158,7 @@ export default function (pi: ExtensionAPI) {
 
 		const modelId = ctx.model?.id ?? "";
 		const sessionId = ctx.sessionManager?.getSessionId();
-		return sanitizePayload(event.payload as Record<string, unknown>, modelId, sessionId);
+		return sanitizePayload(event.payload as Record<string, unknown>, modelId, sessionId, ctx.model?.reasoning ?? false);
 	});
 
 	// ── X Search tool ─────────────────────────────────────────────────────
