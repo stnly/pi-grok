@@ -346,3 +346,32 @@ describe("sanitizePayload function_call_output", () => {
 		expect((p.input as any[])[0].output).toMatch(/no text output/);
 	});
 });
+
+// ─── Non-mutation and non-lossy strip ─────────────────────────────────────
+
+describe("sanitizePayload safety", () => {
+	it("does not mutate the caller's payload object", () => {
+		const original = { ...basePayload(), reasoning: { effort: "low", summary: "auto" } };
+		const snapshot = JSON.parse(JSON.stringify(original));
+		sanitizePayload(original, "grok-4.5");
+		// The caller's object is untouched; only the returned copy is edited.
+		expect(original).toEqual(snapshot);
+	});
+
+	it("preserves unknown reasoning keys when stripping summary", () => {
+		const p = sanitizePayload(
+			{
+				...basePayload(),
+				reasoning: { effort: "high", summary: "auto", exclude: false },
+			},
+			"grok-4.5",
+		);
+		expect(p.reasoning).toEqual({ effort: "high", exclude: false });
+	});
+
+	it("returns a distinct object reference", () => {
+		const original = basePayload();
+		const result = sanitizePayload(original, "grok-4.5");
+		expect(result).not.toBe(original);
+	});
+});

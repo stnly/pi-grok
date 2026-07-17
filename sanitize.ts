@@ -243,7 +243,12 @@ export function sanitizePayload(
 	modelId: string,
 	sessionId?: string,
 ): Record<string, unknown> {
-	const next = params;
+	// Shallow-clone the top level so the host's payload object is never mutated
+	// in place. before_provider_request is a chain: later extensions, or the
+	// host comparing its pre/post snapshot, would otherwise see our edits on the
+	// original reference. Nested values we replace wholesale (input, reasoning)
+	// rather than mutate.
+	const next: Record<string, unknown> = { ...params };
 
 	// ── Sanitize input array ──────────────────────────────────────────────
 	if (Array.isArray(next.input)) {
@@ -302,10 +307,12 @@ export function sanitizePayload(
 	// ── Reasoning effort ──────────────────────────────────────────────────
 	if (supportsReasoningEffort(modelId)) {
 		// This model supports the effort dial. Strip `summary`; xAI doesn't
-		// support it. The effort value (including 'minimal') passes through.
+		// support it. Preserve any other reasoning keys rather than collapsing
+		// to effort alone, so fields xAI adds later ride through untouched.
 		const reasoning = next.reasoning as Record<string, unknown> | undefined;
 		if (reasoning && reasoning.summary !== undefined) {
-			next.reasoning = { effort: reasoning.effort };
+			const { summary: _stripped, ...rest } = reasoning;
+			next.reasoning = rest;
 		}
 	} else {
 		// Model doesn't support reasoning.effort at all; remove it.
