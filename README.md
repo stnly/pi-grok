@@ -1,8 +1,8 @@
-# pi-grok
-
 <p align="center">
   <img src="assets/pi-grok.jpg" width="720" alt="pi-grok — Pi · Grok">
 </p>
+
+# pi-grok
 
 xAI Grok OAuth provider for [pi](https://pi.dev). Use your SuperGrok subscription with OAuth.
 
