@@ -375,3 +375,56 @@ describe("sanitizePayload safety", () => {
 		expect(result).not.toBe(original);
 	});
 });
+
+// ─── OpenAI-only field strip + clamps ───────────────────────────────────────
+
+describe("sanitizePayload field parity", () => {
+	it("drops seed, parallel_tool_calls, and service_tier", () => {
+		const p = sanitizePayload(
+			{ ...basePayload(), seed: 42, parallel_tool_calls: true, service_tier: "auto" },
+			"grok-4.5",
+		);
+		expect(p.seed).toBeUndefined();
+		expect(p.parallel_tool_calls).toBeUndefined();
+		expect(p.service_tier).toBeUndefined();
+	});
+
+	it("drops an empty tools array entirely", () => {
+		const p = sanitizePayload({ ...basePayload(), tools: [] }, "grok-4.5");
+		expect(p.tools).toBeUndefined();
+	});
+
+	it("keeps a non-empty tools array", () => {
+		const tool = { type: "function", name: "do_thing" };
+		const p = sanitizePayload({ ...basePayload(), tools: [tool] }, "grok-4.5");
+		expect(p.tools).toEqual([tool]);
+	});
+
+	it("clamps temperature into [0, 2]", () => {
+		expect(sanitizePayload({ ...basePayload(), temperature: 5 }, "grok-4.5").temperature).toBe(2);
+		expect(sanitizePayload({ ...basePayload(), temperature: -1 }, "grok-4.5").temperature).toBe(0);
+		expect(sanitizePayload({ ...basePayload(), temperature: 0.7 }, "grok-4.5").temperature).toBe(0.7);
+	});
+
+	it("clamps top_p into [0, 1]", () => {
+		expect(sanitizePayload({ ...basePayload(), top_p: 2 }, "grok-4.5").top_p).toBe(1);
+		expect(sanitizePayload({ ...basePayload(), top_p: -0.5 }, "grok-4.5").top_p).toBe(0);
+		expect(sanitizePayload({ ...basePayload(), top_p: 0.95 }, "grok-4.5").top_p).toBe(0.95);
+	});
+
+	it("strips enum arrays containing a slash value from tool schemas", () => {
+		const tools = [
+			{
+				type: "function",
+				name: "set_mode",
+				parameters: {
+					type: "object",
+					properties: { mode: { type: "string", enum: ["read/write", "read-only"] } },
+				},
+			},
+		];
+		const p = sanitizePayload({ ...basePayload(), tools } as Record<string, unknown>, "grok-4.5");
+		const modeEnum = (p.tools as any[])[0].parameters.properties.mode.enum;
+		expect(modeEnum).toBeUndefined();
+	});
+});

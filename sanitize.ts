@@ -233,10 +233,31 @@ function rewriteFunctionCallOutput(
 
 // ─── Main sanitization ────────────────────────────────────────────────────────
 
+/** Drop `enum` arrays that contain a slash-bearing string from tool schemas.
+ * xAI's Responses endpoint rejects tool definitions whose enum values contain
+ * a `/` (422). Walk the schema objects recursively and delete the offending
+ * enum so the tool still registers without the constrained values. */
+function stripSlashEnumsFromTools(tools: unknown[]): void {
+	const walk = (node: unknown): void => {
+		if (!node || typeof node !== "object") return;
+		if (Array.isArray(node)) {
+			for (const item of node) walk(item);
+			return;
+		}
+		const rec = node as Record<string, unknown>;
+		const en = rec.enum;
+		if (Array.isArray(en) && en.some((v) => typeof v === "string" && v.includes("/"))) {
+			delete rec.enum;
+		}
+		for (const v of Object.values(rec)) walk(v);
+	};
+	for (const tool of tools) walk(tool);
+}
+
 /**
  * Sanitize a provider request payload for xAI's Responses API.
  *
- * Returns the modified payload.  Mutates the input in place for efficiency.
+ * Returns a shallow-cloned copy; the caller's payload object is not mutated.
  */
 export function sanitizePayload(
 	params: Record<string, unknown>,
@@ -330,6 +351,25 @@ export function sanitizePayload(
 
 	// xAI doesn't support prompt_cache_retention.
 	delete next.prompt_cache_retention;
+
+	// ── OpenAI-only fields xAI rejects (422) ───────────────────────────────
+	delete next.seed;
+	delete next.parallel_tool_calls;
+	delete next.service_tier;
+
+	// Empty tools array is rejected; drop it entirely when nothing remains.
+	if (Array.isArray(next.tools)) {
+		stripSlashEnumsFromTools(next.tools);
+		if ((next.tools as unknown[]).length === 0) delete next.tools;
+	}
+
+	// Clamp sampling params into xAI's accepted ranges.
+	if (typeof next.temperature === "number") {
+		next.temperature = Math.max(0, Math.min(2, next.temperature));
+	}
+	if (typeof next.top_p === "number") {
+		next.top_p = Math.max(0, Math.min(1, next.top_p));
+	}
 
 	// Add prompt_cache_key for conversation caching (routes to same server).
 	if (sessionId && !next.prompt_cache_key) {
