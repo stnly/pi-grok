@@ -15,6 +15,11 @@ import { XaiErrorCode, XaiOAuthError } from "./errors.js";
 const DEFAULT_BASE_URL = "https://api.x.ai/v1";
 const ISSUER = "https://auth.x.ai";
 const DISCOVERY_URL = `${ISSUER}/.well-known/openid-configuration`;
+const DEVICE_CODE_URL = `${ISSUER}/oauth2/device/code`;
+const DEVICE_TOKEN_URL = `${ISSUER}/oauth2/token`;
+const DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
+/** Client version label sent on the device-code auth requests. */
+const CLIENT_VERSION = process.env.PI_XAI_CLIENT_VERSION || "0.2.101";
 const CLIENT_ID = process.env.PI_XAI_OAUTH_CLIENT_ID || "b1a00492-073a-47ea-816f-4c329264a828";
 const SCOPE = process.env.PI_XAI_OAUTH_SCOPE || "openid profile email offline_access grok-cli:access api:access";
 const CALLBACK_HOST = process.env.PI_XAI_OAUTH_CALLBACK_HOST || "127.0.0.1";
@@ -560,6 +565,156 @@ async function exchangeCode(
 	};
 }
 
+// ─── Device-code login ─────────────────────────────────────────────────────
+
+interface DeviceCodeResponse {
+	device_code: string;
+	user_code: string;
+	verification_uri: string;
+	verification_uri_complete?: string;
+	expires_in: number;
+	interval?: number;
+}
+
+async function requestDeviceCode(signal?: AbortSignal): Promise<DeviceCodeResponse> {
+	const body = new URLSearchParams({
+		client_id: CLIENT_ID,
+		scope: SCOPE,
+		referrer: "grok-build",
+	});
+	const response = await fetch(DEVICE_CODE_URL, {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/x-www-form-urlencoded",
+			"x-grok-client-version": CLIENT_VERSION,
+			"x-grok-client-surface": "cli",
+		},
+		body,
+		signal: AbortSignal.any([AbortSignal.timeout(15_000), ...(signal ? [signal] : [])]),
+	});
+	if (!response.ok) {
+		throw new XaiOAuthError(
+			`xAI device-code request failed: ${response.status} ${await response.text()}`,
+			XaiErrorCode.DEVICE_CODE_FAILED,
+		);
+	}
+	return (await response.json()) as DeviceCodeResponse;
+}
+
+/** Run the OAuth 2.0 device-authorization grant. Surfaces the verification URI
+ * and user code via onAuth, then polls the token endpoint until the user
+ * approves, denies, or the code expires. No loopback server, no paste. */
+export async function loginDeviceCode(
+	callbacks: import("@earendil-works/pi-ai").OAuthLoginCallbacks,
+): Promise<import("@earendil-works/pi-ai").OAuthCredentials> {
+	const { signal } = callbacks;
+	if (signal?.aborted) throw outcomeToError({ kind: "cancelled" });
+
+	const device = await requestDeviceCode(signal);
+	const display = device.verification_uri_complete ?? device.verification_uri;
+	callbacks.onAuth({
+		url: display,
+		instructions: `Open ${display} and enter code ${device.user_code}. Or approve at ${device.verification_uri}.`,
+	});
+
+	let interval = Math.max(1, device.interval ?? 5);
+	const deadline = Date.now() + Math.max(device.expires_in, 60) * 1000;
+	const sleep = (ms: number) =>
+		new Promise<void>((resolve, reject) => {
+			const t = setTimeout(resolve, ms);
+			signal?.addEventListener("abort", () => { clearTimeout(t); reject(outcomeToError({ kind: "cancelled" })); }, { once: true });
+		});
+
+	for (;;) {
+		// Sleep first: an immediate poll on a fresh code only returns pending.
+		await sleep(interval * 1000);
+		if (Date.now() > deadline) {
+			throw new XaiOAuthError(
+				"xAI device code expired. Restart /login.",
+				XaiErrorCode.DEVICE_CODE_FAILED,
+				true,
+			);
+		}
+
+		const response = await fetch(DEVICE_TOKEN_URL, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/x-www-form-urlencoded",
+				"x-grok-client-version": CLIENT_VERSION,
+				"x-grok-client-surface": "cli",
+			},
+			body: new URLSearchParams({
+				grant_type: DEVICE_GRANT_TYPE,
+				device_code: device.device_code,
+				client_id: CLIENT_ID,
+			}),
+			signal: AbortSignal.any([AbortSignal.timeout(15_000), ...(signal ? [signal] : [])]),
+		});
+
+		if (response.ok) {
+			const payload = (await response.json()) as Record<string, unknown>;
+			return shapeDeviceToken(payload, DEVICE_TOKEN_URL);
+		}
+
+		let errBody: { error?: string; error_description?: string } = {};
+		try { errBody = await response.json(); } catch { /* non-JSON error */ }
+		switch (errBody.error) {
+			case "authorization_pending":
+				continue;
+			case "slow_down":
+				interval += 5;
+				continue;
+			case "access_denied":
+				throw new XaiOAuthError(
+					"xAI device login denied.",
+					XaiErrorCode.DEVICE_CODE_FAILED,
+					true,
+				);
+			case "expired_token":
+				throw new XaiOAuthError(
+					"xAI device code expired. Restart /login.",
+					XaiErrorCode.DEVICE_CODE_FAILED,
+					true,
+				);
+			default:
+				throw new XaiOAuthError(
+					`xAI device token exchange failed: ${errBody.error ?? response.status}`,
+					XaiErrorCode.DEVICE_CODE_FAILED,
+				);
+		}
+	}
+}
+
+/** Shape a device-flow token response into stored credentials. Mirrors the
+ * exchange path: validates the id_token when present (device flow carries no
+ * nonce, and validateIdToken only checks nonce when the claim is present). */
+function shapeDeviceToken(
+	payload: Record<string, unknown>,
+	tokenEndpoint: string,
+): import("@earendil-works/pi-ai").OAuthCredentials {
+	const access = String(payload.access_token ?? "");
+	if (!access) {
+		throw new XaiOAuthError(
+			"xAI device login did not return access_token.",
+			XaiErrorCode.DEVICE_CODE_FAILED,
+			true,
+		);
+	}
+	const refresh = String(payload.refresh_token ?? "");
+	const expiresIn = typeof payload.expires_in === "number" ? payload.expires_in : Number(payload.expires_in ?? 3600);
+	const idToken = String(payload.id_token ?? "");
+	if (idToken) validateIdToken(idToken, "");
+	return {
+		access,
+		refresh,
+		expires: computeExpires(access, expiresIn),
+		tokenEndpoint,
+		idToken,
+		tokenType: String(payload.token_type ?? "Bearer"),
+		baseUrl: getBaseUrl(),
+	};
+}
+
 // ─── Login (called by pi's /login flow) ──────────────────────────────────────
 
 export async function login(
@@ -567,6 +722,13 @@ export async function login(
 ): Promise<import("@earendil-works/pi-ai").OAuthCredentials> {
 	const { signal } = callbacks;
 	if (signal?.aborted) throw outcomeToError({ kind: "cancelled" });
+
+	// Device-code flow for headless/SSH boxes where a loopback callback is
+	// awkward. Opt in with PI_XAI_LOGIN_METHOD=device; everything else uses
+	// the browser callback + manual-paste race below.
+	if ((process.env.PI_XAI_LOGIN_METHOD || "").toLowerCase() === "device") {
+		return loginDeviceCode(callbacks);
+	}
 
 	const discovery = await discover();
 	const { verifier, challenge } = await generatePKCE();

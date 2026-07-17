@@ -41,4 +41,6 @@ export const XaiErrorCode = {
 	AUTH_MISSING: "auth_missing",
 	/** A cli-chat-proxy call (account, privacy, billing) failed. */
 	PROXY_REQUEST_FAILED: "proxy_request_failed",
+	/** Device-code login failed (request rejected, denied, expired, network). */
+	DEVICE_CODE_FAILED: "device_code_failed",
 } as const;
