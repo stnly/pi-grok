@@ -701,6 +701,13 @@ function shapeDeviceToken(
 		);
 	}
 	const refresh = String(payload.refresh_token ?? "");
+	if (!refresh) {
+		throw new XaiOAuthError(
+			"xAI device login did not return refresh_token.",
+			XaiErrorCode.DEVICE_CODE_FAILED,
+			true,
+		);
+	}
 	const expiresIn = typeof payload.expires_in === "number" ? payload.expires_in : Number(payload.expires_in ?? 3600);
 	const idToken = String(payload.id_token ?? "");
 	if (idToken) validateIdToken(idToken, "");

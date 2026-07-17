@@ -80,7 +80,7 @@ describe("loginDeviceCode", () => {
 		const { cbs } = callbacks();
 		const state: DeviceState = { pendingCount: 0, tokenResponses: [
 			{ status: 400, body: { error: "slow_down" } },
-			{ status: 200, body: { access_token: "acc", expires_in: 3600 } },
+			{ status: 200, body: { access_token: "acc", refresh_token: "ref", expires_in: 3600 } },
 		] };
 		globalThis.fetch = deviceFetch(state, {
 			device_code: "dc", user_code: "X",
@@ -108,6 +108,20 @@ describe("loginDeviceCode", () => {
 		const { cbs } = callbacks();
 		const state: DeviceState = { pendingCount: 0, tokenResponses: [
 			{ status: 400, body: { error: "expired_token" } },
+		] };
+		globalThis.fetch = deviceFetch(state, {
+			device_code: "dc", user_code: "X",
+			verification_uri: "https://accounts.x.ai/device", expires_in: 300, interval: 0,
+		});
+		await expect(loginDeviceCode(cbs)).rejects.toMatchObject({
+			code: XaiErrorCode.DEVICE_CODE_FAILED, reloginRequired: true,
+		});
+	});
+
+	it("rejects a token body that omits refresh_token", async () => {
+		const { cbs } = callbacks();
+		const state: DeviceState = { pendingCount: 0, tokenResponses: [
+			{ status: 200, body: { access_token: "acc", expires_in: 3600 } },
 		] };
 		globalThis.fetch = deviceFetch(state, {
 			device_code: "dc", user_code: "X",
