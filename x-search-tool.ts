@@ -47,7 +47,8 @@ export async function callXSearch(
 		toDate?: string;
 	},
 	signal?: AbortSignal,
-): Promise<XSearchResult> {	const xSearchTool: Record<string, unknown> = { type: "x_search" };
+): Promise<XSearchResult> {
+	const xSearchTool: Record<string, unknown> = { type: "x_search" };
 	if (options?.allowedXHandles?.length) xSearchTool.allowed_x_handles = options.allowedXHandles;
 	if (options?.excludedXHandles?.length) xSearchTool.excluded_x_handles = options.excludedXHandles;
 	if (options?.fromDate) xSearchTool.from_date = options.fromDate;
