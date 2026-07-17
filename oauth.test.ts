@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	type XaiOAuthCredentials,
 	decodeIdToken,
+	decodeJwtExp,
 	discover,
 	getBaseUrl,
+	isAccessTokenExpiring,
 	isXaiOrigin,
 	outcomeToError,
 	parseCallbackPort,
@@ -422,5 +424,61 @@ describe("refresh", () => {
 
 		await refresh(creds({ tokenEndpoint: undefined, discovery: undefined }));
 		expect(discoverCalled).toBe(true);
+	});
+
+	it("coalesces concurrent refreshes for the same token into one network call", async () => {
+		let calls = 0;
+		let resolveFetch: (v: Response) => void = () => {};
+		const pending = new Promise<Response>((r) => { resolveFetch = r; });
+		globalThis.fetch = vi.fn(async () => {
+			calls++;
+			return pending;
+		}) as typeof fetch;
+
+		const c = creds();
+		const a = refresh(c);
+		const b = refresh(c);
+		// Both calls are in flight against the single pending fetch...
+		resolveFetch(fakeResponse({ access_token: "new", refresh_token: "r2", expires_in: 3600 }));
+		const [outA, outB] = await Promise.all([a, b]);
+
+		expect(calls).toBe(1);
+		expect((outA as XaiOAuthCredentials).access).toBe("new");
+		expect((outB as XaiOAuthCredentials).access).toBe("new");
+	});
+});
+
+// ─── access-token JWT expiry ─────────────────────────────────────────────────
+
+describe("decodeJwtExp / isAccessTokenExpiring", () => {
+	function jwtWithExp(exp: number): string {
+		const b64 = (obj: unknown) =>
+			btoa(JSON.stringify(obj)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+		return `${b64({ alg: "none" })}.${b64({ exp })}.sig`;
+	}
+
+	it("decodes the exp claim from an access-token JWT", () => {
+		const exp = Math.floor(Date.now() / 1000) + 3600;
+		expect(decodeJwtExp(jwtWithExp(exp))).toBe(exp);
+	});
+
+	it("returns null for a non-JWT or unparseable token", () => {
+		expect(decodeJwtExp("not-a-jwt")).toBeNull();
+		expect(decodeJwtExp("a.b")).toBeNull();
+		expect(decodeJwtExp("only.two.parts")).toBeNull();
+	});
+
+	it("treats a token expiring past the skew window as expiring", () => {
+		const soon = Math.floor(Date.now() / 1000) + 60; // 1 minute out
+		expect(isAccessTokenExpiring(jwtWithExp(soon))).toBe(true);
+	});
+
+	it("treats a token well inside its lifetime as not expiring", () => {
+		const far = Math.floor(Date.now() / 1000) + 3600;
+		expect(isAccessTokenExpiring(jwtWithExp(far))).toBe(false);
+	});
+
+	it("returns false for an opaque token with no exp", () => {
+		expect(isAccessTokenExpiring("opaque-token")).toBe(false);
 	});
 });

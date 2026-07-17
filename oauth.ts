@@ -400,6 +400,43 @@ export function decodeIdToken(token: string): IdTokenClaims | null {
 	}
 }
 
+// ─── Access-token expiry (JWT exp) ────────────────────────────────────────────
+
+/** Decode the `exp` claim (seconds since epoch) from an access-token JWT.
+ * Returns null for a non-JWT or unparseable token. Used to derive the real
+ * expiry independent of the stored timestamp, which can drift on clock skew
+ * or when another process rotated the token. */
+export function decodeJwtExp(token: string): number | null {
+	const parts = token.split(".");
+	if (parts.length < 2) return null;
+	try {
+		const b64 = parts[1]!.replace(/-/g, "+").replace(/_/g, "/");
+		const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+		const claims = JSON.parse(atob(padded)) as { exp?: unknown };
+		return typeof claims.exp === "number" ? claims.exp : null;
+	} catch {
+		return null;
+	}
+}
+
+/** True when the access token is expired or within `skewMs` of expiry. Returns
+ * false when the token carries no `exp` (no basis to force a refresh). */
+export function isAccessTokenExpiring(token: string, skewMs: number = REFRESH_SKEW_MS): boolean {
+	const exp = decodeJwtExp(token);
+	if (exp === null) return false;
+	return exp * 1000 <= Date.now() + Math.max(0, skewMs);
+}
+
+/** Compute the stored expiry timestamp, capped by the access token's real JWT
+ * `exp` when present, so the host refreshes no later than the token actually
+ * expires. Falls back to the expires_in-based value for opaque tokens. */
+function computeExpires(accessToken: string, expiresInSec: number): number {
+	const fromExpiresIn = Date.now() + expiresInSec * 1000 - REFRESH_SKEW_MS;
+	const exp = decodeJwtExp(accessToken);
+	if (exp === null) return fromExpiresIn;
+	return Math.min(fromExpiresIn, exp * 1000 - REFRESH_SKEW_MS);
+}
+
 /**
  * Validate the id_token returned in the token exchange.
  *
@@ -515,7 +552,7 @@ async function exchangeCode(
 	return {
 		access,
 		refresh,
-		expires: Date.now() + expiresIn * 1000 - REFRESH_SKEW_MS,
+		expires: computeExpires(access, expiresIn),
 		tokenEndpoint,
 		idToken,
 		tokenType: String(payload.token_type ?? "Bearer"),
@@ -667,13 +704,34 @@ export async function login(
 
 // ─── Token refresh ────────────────────────────────────────────────────────────
 
+// ─── Token refresh ────────────────────────────────────────────────────────────
+
+/** In-flight refreshes keyed by refresh token. The token is single-use, so two
+ * concurrent refreshes with the same token race and the loser fails with a
+ * 400/401. Coalescing parallel calls onto one network request avoids that; the
+ * key is the refresh token so distinct sessions do not block each other. */
+const refreshLocks = new Map<string, Promise<import("@earendil-works/pi-ai").OAuthCredentials>>();
+
+async function withRefreshLock(
+	key: string,
+	fn: () => Promise<import("@earendil-works/pi-ai").OAuthCredentials>,
+): Promise<import("@earendil-works/pi-ai").OAuthCredentials> {
+	const existing = refreshLocks.get(key);
+	if (existing) return existing;
+	const p = (async () => {
+		try {
+			return await fn();
+		} finally {
+			refreshLocks.delete(key);
+		}
+	})();
+	refreshLocks.set(key, p);
+	return p;
+}
+
 export async function refresh(
 	credentials: import("@earendil-works/pi-ai").OAuthCredentials,
 ): Promise<import("@earendil-works/pi-ai").OAuthCredentials> {
-	const xai = credentials as XaiOAuthCredentials;
-	const tokenEndpoint = xai.tokenEndpoint || xai.discovery?.token_endpoint || (await discover()).token_endpoint;
-	validateEndpoint(tokenEndpoint, "token_endpoint");
-
 	if (!credentials.refresh) {
 		throw new XaiOAuthError(
 			"Missing refresh_token. Re-login required.",
@@ -681,6 +739,15 @@ export async function refresh(
 			true,
 		);
 	}
+	return withRefreshLock(credentials.refresh, () => refreshOnce(credentials));
+}
+
+async function refreshOnce(
+	credentials: import("@earendil-works/pi-ai").OAuthCredentials,
+): Promise<import("@earendil-works/pi-ai").OAuthCredentials> {
+	const xai = credentials as XaiOAuthCredentials;
+	const tokenEndpoint = xai.tokenEndpoint || xai.discovery?.token_endpoint || (await discover()).token_endpoint;
+	validateEndpoint(tokenEndpoint, "token_endpoint");
 
 	const response = await fetch(tokenEndpoint, {
 		method: "POST",
@@ -719,7 +786,7 @@ export async function refresh(
 		...xai,
 		access,
 		refresh: refresh_new,
-		expires: Date.now() + expiresIn * 1000 - REFRESH_SKEW_MS,
+		expires: computeExpires(access, expiresIn),
 		tokenEndpoint,
 		idToken: String(payload.id_token ?? xai.idToken ?? ""),
 		tokenType: String(payload.token_type ?? xai.tokenType ?? "Bearer"),
