@@ -440,4 +440,22 @@ describe("sanitizePayload field parity", () => {
 		const modeEnum = (p.tools as any[])[0].parameters.properties.mode.enum;
 		expect(modeEnum).toBeUndefined();
 	});
+
+	it("does not mutate the caller's tool schemas when stripping enums", () => {
+		const original = [
+			{
+				type: "function",
+				name: "set_mode",
+				parameters: {
+					type: "object",
+					properties: { mode: { type: "string", enum: ["read/write", "read-only"] } },
+				},
+			},
+		];
+		const snapshot = JSON.parse(JSON.stringify(original));
+		sanitizePayload({ ...basePayload(), tools: original } as Record<string, unknown>, "grok-4.5");
+		// The caller's tool schema is untouched; only the returned copy loses the enum.
+		expect(original).toEqual(snapshot);
+		expect(original[0].parameters.properties.mode.enum).toEqual(["read/write", "read-only"]);
+	});
 });

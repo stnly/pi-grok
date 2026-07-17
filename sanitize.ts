@@ -367,9 +367,13 @@ export function sanitizePayload(
 	delete next.service_tier;
 
 	// Empty tools array is rejected; drop it entirely when nothing remains.
+	// Deep-clone first: the tool schemas are nested objects shared with the
+	// caller's payload, so deleting an enum in place would mutate the host's
+	// tool definitions (the shallow clone only broke the top-level reference).
 	if (Array.isArray(next.tools)) {
-		stripSlashEnumsFromTools(next.tools);
-		if ((next.tools as unknown[]).length === 0) delete next.tools;
+		const tools = structuredClone(next.tools) as unknown[];
+		stripSlashEnumsFromTools(tools);
+		next.tools = tools.length > 0 ? tools : undefined;
 	}
 
 	// Clamp sampling params into xAI's accepted ranges.
