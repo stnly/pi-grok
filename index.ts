@@ -25,6 +25,7 @@ import {
 	rebuildModelsForOAuth,
 	thinkingLevelMapFor,
 	triggerDiscovery,
+	discoveryStatus,
 	CLI_PROXY_BASE_URL,
 	CLI_PROXY_HEADERS,
 	type XaiModelConfig,
@@ -187,7 +188,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			ctx.ui.notify(
-				formatStatusBlock({ user, modelCount: grokModels.length, tokenSource }),
+				formatStatusBlock({ user, modelCount: grokModels.length, tokenSource, discovery: discoveryStatus() }),
 				"info",
 			);
 		},

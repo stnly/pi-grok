@@ -182,6 +182,26 @@ describe("formatStatusBlock", () => {
 		expect(block).toContain("Models: 5 available");
 		expect(block).not.toContain("Account:");
 	});
+
+	it("renders the catalog state line when discovery is supplied", () => {
+		const warm = formatStatusBlock({
+			user: null, modelCount: 2, tokenSource: "oauth",
+			discovery: { state: "warm", modelCount: 9, lastError: null },
+		});
+		expect(warm).toContain("Catalog: warm (9 catalog ids)");
+
+		const cold = formatStatusBlock({
+			user: null, modelCount: 2, tokenSource: "oauth",
+			discovery: { state: "cold", modelCount: 0, lastError: null },
+		});
+		expect(cold).toContain("Catalog: cold (using built-in list)");
+
+		const failed = formatStatusBlock({
+			user: null, modelCount: 2, tokenSource: "oauth",
+			discovery: { state: "cold", modelCount: 0, lastError: "catalog fetch failed" },
+		});
+		expect(failed).toContain("last error: catalog fetch failed");
+	});
 });
 
 // ─── Proxy network calls (mocked fetch) ──────────────────────────────────────

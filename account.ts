@@ -231,8 +231,9 @@ export function formatStatusBlock(parts: {
 	user: XaiUser | null;
 	modelCount: number;
 	tokenSource: "oauth" | "env" | "none";
+	discovery?: { state: "cold" | "in-flight" | "warm"; modelCount: number; lastError: string | null };
 }): string {
-	const { user, modelCount, tokenSource } = parts;
+	const { user, modelCount, tokenSource, discovery } = parts;
 	const lines: string[] = [];
 
 	if (tokenSource === "env") {
@@ -250,6 +251,15 @@ export function formatStatusBlock(parts: {
 		if (user.organizationName) lines.push(`Org: ${user.organizationName}`);
 		lines.push(`Code access: ${user.hasGrokCodeAccess ? "yes" : "no"}`);
 		lines.push(`Privacy: ${privacyLine(user)}`);
+	}
+
+	if (discovery) {
+		const label = discovery.state === "warm"
+			? `warm (${discovery.modelCount} catalog ids)`
+			: discovery.state === "in-flight"
+				? "fetching"
+				: "cold (using built-in list)";
+		lines.push(`Catalog: ${label}${discovery.lastError ? ` - last error: ${discovery.lastError}` : ""}`);
 	}
 
 	return lines.join("\n");

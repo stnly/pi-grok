@@ -343,6 +343,9 @@ async function fetchLiveCatalog(
  */
 let discoveredBody: { data?: ApiModelEntry[] } | null = null;
 let discoveryInFlight: Promise<void> | null = null;
+let discoveryLastToken: string | null = null;
+let discoveryLastError: string | null = null;
+let discoveryFetchedAt = 0; // epoch ms of the last successful fetch, 0 = never
 
 /**
  * Merge the discovered catalog into a base list. Returns `base` unchanged
@@ -380,18 +383,57 @@ export function applyDiscoveredModels(
  * Errors are swallowed (a failed fetch leaves the cache as-is).
  */
 export function triggerDiscovery(accessToken: string, baseUrl: string): void {
-	if (discoveryInFlight) return;
+	// A second trigger while one is in flight is dropped only when it is for
+	// the same token. A token change (re-login, refresh) means the cached body
+	// may belong to a different session, so kick off a fresh fetch.
+	if (discoveryInFlight && discoveryLastToken === accessToken) return;
+	discoveryLastToken = accessToken;
 	discoveryInFlight = (async () => {
-		const body = await fetchLiveCatalog(accessToken, baseUrl);
-		if (body && Array.isArray(body.data)) discoveredBody = body;
-		discoveryInFlight = null;
+		try {
+			const body = await fetchLiveCatalog(accessToken, baseUrl);
+			if (body && Array.isArray(body.data)) {
+				discoveredBody = body;
+				discoveryLastError = null;
+				discoveryFetchedAt = Date.now();
+			} else if (body === null) {
+				// fetchLiveCatalog returns null on network/HTTP failure; record so
+				// /xai-status can explain why the catalog looks stale.
+				discoveryLastError = "catalog fetch failed";
+			}
+		} catch (err) {
+			discoveryLastError = err instanceof Error ? err.message : String(err);
+		} finally {
+			discoveryInFlight = null;
+		}
 	})();
+}
+
+/** Snapshot of the discovery cache for `/xai-status`. `cold` means no
+ * successful fetch has completed yet; `in-flight` means one is running;
+ * `warm` means the cache holds a catalog body. */
+export function discoveryStatus(): {
+	state: "cold" | "in-flight" | "warm";
+	modelCount: number;
+	lastError: string | null;
+} {
+	let state: "cold" | "in-flight" | "warm";
+	if (discoveryInFlight) state = "in-flight";
+	else if (discoveredBody) state = "warm";
+	else state = "cold";
+	return {
+		state,
+		modelCount: discoveredBody?.data?.length ?? 0,
+		lastError: discoveryLastError,
+	};
 }
 
 /** Clear the discovery cache. For tests only. */
 export function resetDiscoveryForTests(): void {
 	discoveredBody = null;
 	discoveryInFlight = null;
+	discoveryLastToken = null;
+	discoveryLastError = null;
+	discoveryFetchedAt = 0;
 }
 
 /**

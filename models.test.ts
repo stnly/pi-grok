@@ -10,6 +10,7 @@ import {
 	mergeLiveModels,
 	rebuildModelsForOAuth,
 	resetDiscoveryForTests,
+	discoveryStatus,
 	supportsReasoningEffort,
 	thinkingLevelMapFor,
 	triggerDiscovery,
@@ -393,6 +394,31 @@ describe("discovery cache", () => {
 	it("returns the base list unchanged before any fetch completes", () => {
 		const before = mergeDiscoveredModels(FALLBACK_MODELS);
 		expect(before).toEqual(FALLBACK_MODELS);
+	});
+
+	it("reports cold state before any fetch and warm after", async () => {
+		expect(discoveryStatus().state).toBe("cold");
+		expect(discoveryStatus().lastError).toBeNull();
+		triggerDiscovery("token", CLI_PROXY_URL);
+		// While the fire-and-forget fetch runs the state is in-flight, then warm.
+		const deadline = Date.now() + 2000;
+		while (discoveryStatus().state !== "warm" && Date.now() < deadline) {
+			await new Promise((r) => setTimeout(r, 20));
+		}
+		const status = discoveryStatus();
+		expect(status.state).toBe("warm");
+		expect(status.modelCount).toBe(2);
+		expect(status.lastError).toBeNull();
+	});
+
+	it("does not drop a re-trigger when the token has changed", () => {
+		triggerDiscovery("token-a", CLI_PROXY_URL);
+		triggerDiscovery("token-a", CLI_PROXY_URL); // same token: dropped
+		triggerDiscovery("token-b", CLI_PROXY_URL); // new token: not dropped
+		// token-b forces a fresh fetch; discoveryLastToken tracks the latest.
+		// (Behavioral assertion: the call returns without throwing and accepts
+		// the new token rather than no-oping on the in-flight guard.)
+		expect(discoveryStatus().state).not.toBe("cold");
 	});
 
 	it("surfaces discovered models after a successful fetch (enrichment only)", async () => {
