@@ -166,6 +166,13 @@ export function parsePrivacyArg(arg: string): PrivacyArg {
 
 // ─── Privacy selection ───────────────────────────────────────────────────────
 
+/** Human-readable description of what each retention mode does. Shared by
+ * the picker labels and the status line so the policy wording can't drift
+ * between them; the lead noun ("Privacy mode" vs "privacy mode") is added by
+ * each caller, cased for its own render context. */
+const PRIVACY_DESC_OPT_OUT = "your coding data is not used to train or improve xAI's models";
+const PRIVACY_DESC_SHARE = "your coding data may be used to train and improve xAI's models";
+
 /** One row in the interactive privacy picker. */
 export interface PrivacyChoice {
 	/** Stable label describing the mode (no current-state suffix). */
@@ -186,12 +193,12 @@ export interface PrivacyChoice {
 export function privacyChoices(currentOptOut: boolean): PrivacyChoice[] {
 	return [
 		{
-			label: "Privacy mode (your coding data is not used to train or improve xAI's models)",
+			label: `Privacy mode (${PRIVACY_DESC_OPT_OUT})`,
 			optOut: true,
 			current: currentOptOut === true,
 		},
 		{
-			label: "Share data (your coding data may be used to train and improve xAI's models)",
+			label: `Share data (${PRIVACY_DESC_SHARE})`,
 			optOut: false,
 			current: currentOptOut === false,
 		},
@@ -217,8 +224,8 @@ export function privacyUsage(): string {
 export function privacyLine(user: Pick<XaiUser, "codingDataRetentionOptOut" | "isZdr">): string {
 	if (user.isZdr) return "Zero Data Retention enabled (locked by your organization)";
 	return user.codingDataRetentionOptOut
-		? "privacy mode (your coding data is not used to train or improve xAI's models)"
-		: "share data (your coding data may be used to train and improve xAI's models)";
+		? `privacy mode (${PRIVACY_DESC_OPT_OUT})`
+		: `share data (${PRIVACY_DESC_SHARE})`;
 }
 
 /**
