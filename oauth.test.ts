@@ -5,7 +5,6 @@ import {
 	decodeJwtExp,
 	discover,
 	getBaseUrl,
-	isAccessTokenExpiring,
 	isXaiOrigin,
 	outcomeToError,
 	parseCallbackPort,
@@ -457,7 +456,7 @@ describe("refresh", () => {
 
 // ─── access-token JWT expiry ─────────────────────────────────────────────────
 
-describe("decodeJwtExp / isAccessTokenExpiring", () => {
+describe("decodeJwtExp", () => {
 	function jwtWithExp(exp: number): string {
 		const b64 = (obj: unknown) =>
 			btoa(JSON.stringify(obj)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -473,19 +472,5 @@ describe("decodeJwtExp / isAccessTokenExpiring", () => {
 		expect(decodeJwtExp("not-a-jwt")).toBeNull();
 		expect(decodeJwtExp("a.b")).toBeNull();
 		expect(decodeJwtExp("only.two.parts")).toBeNull();
-	});
-
-	it("treats a token expiring past the skew window as expiring", () => {
-		const soon = Math.floor(Date.now() / 1000) + 60; // 1 minute out
-		expect(isAccessTokenExpiring(jwtWithExp(soon))).toBe(true);
-	});
-
-	it("treats a token well inside its lifetime as not expiring", () => {
-		const far = Math.floor(Date.now() / 1000) + 3600;
-		expect(isAccessTokenExpiring(jwtWithExp(far))).toBe(false);
-	});
-
-	it("returns false for an opaque token with no exp", () => {
-		expect(isAccessTokenExpiring("opaque-token")).toBe(false);
 	});
 });

@@ -413,13 +413,6 @@ export function decodeJwtExp(token: string): number | null {
 	return typeof claims.exp === "number" ? claims.exp : null;
 }
 
-/** True when the access token is expired or within `skewMs` of expiry. Returns
- * false when the token carries no `exp` (no basis to force a refresh). */
-export function isAccessTokenExpiring(token: string, skewMs: number = REFRESH_SKEW_MS): boolean {
-	const exp = decodeJwtExp(token);
-	if (exp === null) return false;
-	return exp * 1000 <= Date.now() + Math.max(0, skewMs);
-}
 
 /** Compute the stored expiry timestamp, capped by the access token's real JWT
  * `exp` when present, so the host refreshes no later than the token actually
