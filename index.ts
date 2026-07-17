@@ -120,12 +120,13 @@ export default function (pi: ExtensionAPI) {
 
 			modifyModels(models: unknown, credentials: unknown) {
 				const creds = credentials as XaiOAuthCredentials;
-				const effectiveBaseUrl = String(creds.baseUrl ?? getBaseUrl()).replace(/\/+$/, "");
 
 				// Kick off a background live-catalog fetch for enrichment (context
-				// windows, newly released ids). Routing is static: rebuild below sends
-				// every OAuth model through the CLI proxy.
-				if (creds.access) triggerDiscovery(creds.access, effectiveBaseUrl);
+				// windows, newly released ids). The OAuth session's model registry
+				// lives on the cli-chat-proxy, so discovery rides the proxy with
+				// the proxy identity headers, never api.x.ai. Routing of individual
+				// models is static and set in rebuildModelsForOAuth below.
+				if (creds.access) triggerDiscovery(creds.access, CLI_PROXY_BASE_URL);
 
 				// Full rebuild: append discovered ids, re-apply PI_XAI_OAUTH_MODELS,
 				// stamp api/provider, and route every model through the CLI proxy.

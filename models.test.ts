@@ -450,4 +450,22 @@ describe("discovery cache", () => {
 		const other = result.find((m) => (m as any).provider === "other") as any;
 		expect(other.baseUrl).toBe("https://example.com");
 	});
+
+	it("routes the OAuth catalog fetch through the cli-chat-proxy, not api.x.ai", async () => {
+		triggerDiscovery("token", CLI_PROXY_URL);
+		// Let the fire-and-forget fetch resolve.
+		const deadline = Date.now() + 2000;
+		while (!mergeDiscoveredModels(FALLBACK_MODELS).some((m) => m.id === "grok-9-future") && Date.now() < deadline) {
+			await new Promise((r) => setTimeout(r, 20));
+		}
+		const calls = (globalThis.fetch as unknown as { mock: { calls: [string, unknown][] } }).mock.calls;
+		const modelsCall = calls.find(([url]) => String(url).endsWith("/models"));
+		expect(modelsCall).toBeDefined();
+		expect(String(modelsCall![0])).toBe(`${CLI_PROXY_URL}/models`);
+		const init = modelsCall![1] as Record<string, unknown>;
+		expect(init.headers).toMatchObject({
+			Authorization: "Bearer token",
+			"X-XAI-Token-Auth": "xai-grok-cli",
+		});
+	});
 });

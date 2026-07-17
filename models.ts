@@ -370,10 +370,11 @@ export function applyDiscoveredModels(
 /**
  * Fire-and-forget live catalog fetch.
  *
- * Fetches the public `/models` catalog for enrichment: discovered ids and
- * authoritative context window / max-token fields. Routing is static (every
- * OAuth model rides the CLI proxy via `rebuildModelsForOAuth`), so the proxy
- * catalog is not fetched here.
+ * Fetches the OAuth session's `/models` catalog from the cli-chat-proxy for
+ * enrichment: discovered ids and authoritative context window / max-token
+ * fields. The caller passes the proxy base URL so the fetch carries the
+ * session's proxy identity headers and never touches api.x.ai (the API-key
+ * path). Model routing is static and set in rebuildModelsForOAuth.
  *
  * Deduplicates concurrent calls so repeated `/reload`s don't stack requests.
  * Errors are swallowed (a failed fetch leaves the cache as-is).
