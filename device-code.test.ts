@@ -41,11 +41,12 @@ function deviceFetch(state: DeviceState, codeResponse: unknown) {
 	}) as unknown as typeof fetch;
 }
 
-function callbacks(): { cbs: OAuthLoginCallbacks; auth: { url: string | undefined; instructions: string | undefined } } {
+function callbacks(signal?: AbortSignal): { cbs: OAuthLoginCallbacks; auth: { url: string | undefined; instructions: string | undefined } } {
 	const auth = { url: undefined as string | undefined, instructions: undefined as string | undefined };
 	const cbs: OAuthLoginCallbacks = {
 		onAuth: (info) => { auth.url = info.url; auth.instructions = info.instructions; },
 		onPrompt: async () => "",
+		...(signal ? { signal } : {}),
 	};
 	return { cbs, auth };
 }
@@ -130,5 +131,29 @@ describe("loginDeviceCode", () => {
 		await expect(loginDeviceCode(cbs)).rejects.toMatchObject({
 			code: XaiErrorCode.DEVICE_CODE_FAILED, reloginRequired: true,
 		});
+	});
+
+	it("rejects with cancel when the login is aborted mid-poll sleep", async () => {
+		const ac = new AbortController();
+		const { cbs, auth } = callbacks(ac.signal);
+		// Pending response so the first poll does not resolve; interval 1s sleeps
+		// long enough to abort during it.
+		const state: DeviceState = { pendingCount: 0, tokenResponses: [
+			{ status: 400, body: { error: "authorization_pending" } },
+		] };
+		globalThis.fetch = deviceFetch(state, {
+			device_code: "dc", user_code: "X",
+			verification_uri: "https://accounts.x.ai/device", expires_in: 300, interval: 1,
+		});
+
+		const promise = loginDeviceCode(cbs);
+		// Wait for the code request + onAuth, then abort during the sleep.
+		const deadline = Date.now() + 2000;
+		while (!auth.url && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+		ac.abort();
+
+		// The abort rejects the sleep with the cancel sentinel (Error, not a
+		// fatal DEVICE_CODE_FAILED), so the user just sees a cancelled login.
+		await expect(promise).rejects.toThrow(/cancelled/i);
 	});
 });

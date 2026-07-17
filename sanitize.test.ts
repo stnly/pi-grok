@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { sanitizePayload } from "./sanitize.js";
 
 function basePayload(over: Record<string, unknown> = {}): Record<string, unknown> {
@@ -298,6 +301,40 @@ describe("sanitizePayload image normalization", () => {
 		const content = (p.input as any[])[0].content as any[];
 		expect(content[0].image_url).toBe("data:image/png;base64,AAAA");
 		expect(content[0].detail).toBe("auto");
+	});
+
+	it("resolves a local image path to a data URI", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-grok-img-"));
+		const file = join(dir, "pic.png");
+		writeFileSync(file, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+		try {
+			const p = sanitizePayload(
+				{
+					model: "grok-4.5",
+					input: [{ role: "user", content: [{ type: "input_image", image_url: file }] }],
+				},
+				"grok-4.5",
+			);
+			const part = (p.input as any[])[0].content[0];
+			expect(part.type).toBe("input_image");
+			expect(part.image_url).toMatch(/^data:image\/png;base64,/);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("normalizes a {type:'image', data, mimeType} part to input_image with a data URI", () => {
+		const p = sanitizePayload(
+			{
+				model: "grok-4.5",
+				input: [{ role: "user", content: [{ type: "image", data: "QUJD", mimeType: "image/png" }] }],
+			},
+			"grok-4.5",
+		);
+		const part = (p.input as any[])[0].content[0];
+		expect(part.type).toBe("input_image");
+		expect(part.image_url).toBe("data:image/png;base64,QUJD");
+		expect(part.detail).toBe("auto");
 	});
 });
 
