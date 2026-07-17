@@ -34,6 +34,11 @@ describe("FALLBACK_MODELS", () => {
 		expect(m?.contextWindow).toBe(500_000);
 	});
 
+	it("grok-4.5 carries the observed max output tokens (128k)", () => {
+		const m = FALLBACK_MODELS.find((x) => x.id === "grok-4.5");
+		expect(m?.maxTokens).toBe(131_072);
+	});
+
 	it("carries no routing hints (routing is owned by rebuildModelsForOAuth)", () => {
 		// FALLBACK is model metadata only. baseUrl/headers are stamped at rebuild
 		// time so every OAuth model rides the CLI proxy uniformly.

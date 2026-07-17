@@ -103,7 +103,7 @@ export const FALLBACK_MODELS: XaiModelConfig[] = [
 		input: ["text", "image"],
 		cost: COST_45,
 		contextWindow: 500_000,
-		maxTokens: 30_000,
+		maxTokens: 131_072,
 	},
 	{
 		id: "grok-4.3",
@@ -112,7 +112,7 @@ export const FALLBACK_MODELS: XaiModelConfig[] = [
 		input: ["text", "image"],
 		cost: COST_43,
 		contextWindow: 1_000_000,
-		maxTokens: 30_000,
+		maxTokens: 131_072,
 	},
 	{
 		id: "grok-4.20-0309-reasoning",
@@ -121,7 +121,7 @@ export const FALLBACK_MODELS: XaiModelConfig[] = [
 		input: ["text", "image"],
 		cost: COST_420,
 		contextWindow: 2_000_000,
-		maxTokens: 30_000,
+		maxTokens: 131_072,
 	},
 	{
 		id: "grok-4.20-0309-non-reasoning",
@@ -130,7 +130,7 @@ export const FALLBACK_MODELS: XaiModelConfig[] = [
 		input: ["text", "image"],
 		cost: COST_420,
 		contextWindow: 2_000_000,
-		maxTokens: 30_000,
+		maxTokens: 131_072,
 	},
 	{
 		id: "grok-4.20-multi-agent-0309",
@@ -139,7 +139,7 @@ export const FALLBACK_MODELS: XaiModelConfig[] = [
 		input: ["text", "image"],
 		cost: COST_420,
 		contextWindow: 2_000_000,
-		maxTokens: 30_000,
+		maxTokens: 131_072,
 	},
 ];
 
