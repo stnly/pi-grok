@@ -73,10 +73,10 @@ carry the client headers the proxy expects (`x-grok-client-version`,
 `x-grok-client-mode`, `X-XAI-Token-Auth`, `x-authenticateresponse`) so it
 recognizes the session.
 
-A background fetch of `api.x.ai/v1/models` enriches the model list with
-authoritative context windows and surfaces newly released ids, but it does
-not drive routing. If that fetch fails, the built-in list is used and routing
-stays on the proxy.
+A background fetch of `cli-chat-proxy.grok.com/v1/models` enriches the model
+list with authoritative context windows and surfaces newly released ids, but
+it does not drive routing. If that fetch fails, the built-in list is used and
+routing stays on the proxy.
 
 Filter or reorder with `PI_XAI_OAUTH_MODELS`. The filter is re-applied after
 live discovery, so it still holds when new catalog ids arrive:
@@ -193,7 +193,7 @@ pi-grok/
 
 - **Payload sanitization via `before_provider_request`** - decoupled from streaming, visible to other extensions, chainable.
 - **X Search tool** - proxy via `pi.registerTool`. Any model can search X. Per-query parameters supported.
-- **Live model catalog** - fetches `api.x.ai/v1/models` on login for enrichment (context windows, new ids); routing always sends OAuth inference through the CLI chat proxy so requests ride the SuperGrok quota.
+- **Live model catalog** - fetches `cli-chat-proxy.grok.com/v1/models` on login for enrichment (context windows, new ids); routing also goes through the CLI chat proxy so requests ride the SuperGrok quota.
 - **Account + privacy commands** - `/xai-status` reads the cli-chat-proxy `/user` enrichment for account and retention state; `/xai-privacy` opens an inline themed picker (green-tick current row, matching the login selector) that toggles coding-data-retention via `PUT /privacy/coding-data-retention`.
 - **Typed errors** - `XaiOAuthError` with machine-readable codes for distinguishing retryable vs fatal failures.
 - **Web Crypto** - `crypto.subtle` for PKCE.
