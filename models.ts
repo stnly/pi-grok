@@ -22,11 +22,11 @@ export interface XaiModelConfig {
 	cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
 	contextWindow: number;
 	maxTokens: number;
-	/** Models that don't support reasoning.effort get a thinkingLevelMap. */
+	/** Per-level overrides for the host's thinking-level picker. */
 	thinkingLevelMap?: Record<string, string | null>;
-	/** Override base URL for models only available on the CLI proxy. */
+	/** Base URL for requests to this model (stamped uniformly to the CLI proxy). */
 	baseUrl?: string;
-	/** Extra headers to send with requests for this model. */
+	/** Headers to send with requests for this model. */
 	headers?: Record<string, string>;
 }
 
@@ -43,8 +43,8 @@ export const CLI_PROXY_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
  */
 const GROK_CLIENT_VERSION = process.env.PI_XAI_CLIENT_VERSION || "0.2.101";
 
-/** Session product label, overridable via `GROK_CLIENT_NAME`. */
-const CLIENT_IDENTIFIER = process.env.GROK_CLIENT_NAME || "grok-shell";
+/** Session product label, overridable via `PI_XAI_CLIENT_NAME`. */
+const CLIENT_IDENTIFIER = process.env.PI_XAI_CLIENT_NAME || "grok-shell";
 
 /**
  * Map Node's platform/arch names to the labels the proxy expects so the
@@ -403,8 +403,7 @@ export function resetDiscoveryForTests(): void {
  * - Appends newly discovered ids (map-only rewrites drop them)
  * - Stamps `api` / `provider` on entries that lack them
  * - Routes every OAuth model through the CLI proxy with the proxy header
- *   set, so subscription inference rides the proxy from the first load
- *   rather than the billed public API.
+ *   set, so subscription inference rides the proxy from the first load.
  */
 export function rebuildModelsForOAuth(
 	allModels: Array<Record<string, unknown>>,

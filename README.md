@@ -141,7 +141,8 @@ If your organization enforces Zero Data Retention, the choice is locked and
 | `PI_XAI_OAUTH_CALLBACK_PORT` | `56121` |
 | `PI_XAI_OAUTH_CLIENT_ID` | built-in |
 | `PI_XAI_CLIENT_VERSION` | `0.2.101` (client version label sent to the proxy) |
-| `XAI_OAUTH_TOKEN` | skip OAuth, use raw token (no refresh, no discovery) |
+| `PI_XAI_CLIENT_NAME` | `grok-shell` (session product label sent to the proxy) |
+| `XAI_OAUTH_TOKEN` | skip OAuth, use raw token (no refresh, no discovery; proxy routing still applies) |
 | `PI_XAI_X_SEARCH` | `true` |
 | `PI_XAI_X_SEARCH_MODEL` | `grok-4.5` |
 

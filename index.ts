@@ -25,6 +25,8 @@ import {
 	rebuildModelsForOAuth,
 	thinkingLevelMapFor,
 	triggerDiscovery,
+	CLI_PROXY_BASE_URL,
+	CLI_PROXY_HEADERS,
 	type XaiModelConfig,
 } from "./models.js";
 import {
@@ -93,8 +95,12 @@ export default function (pi: ExtensionAPI) {
 			cost: m.cost,
 			contextWindow: m.contextWindow,
 			maxTokens: m.maxTokens,
-			...(m.baseUrl ? { baseUrl: m.baseUrl } : {}),
-			...(m.headers ? { headers: m.headers } : {}),
+			// Stamp proxy routing at registration so the XAI_OAUTH_TOKEN env
+			// bypass (which skips modifyModels) rides the proxy too. The OAuth
+			// path re-stamps this in rebuildModelsForOAuth, including discovered
+			// ids the registration map never saw.
+			baseUrl: CLI_PROXY_BASE_URL,
+			headers: CLI_PROXY_HEADERS,
 		})),
 		oauth: {
 			name: "xAI (SuperGrok Subscription)",

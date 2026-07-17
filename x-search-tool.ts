@@ -36,8 +36,6 @@ async function callXSearch(
 		excludedXHandles?: string[];
 		fromDate?: string;
 		toDate?: string;
-		enableImageUnderstanding?: boolean;
-		enableVideoUnderstanding?: boolean;
 	},
 	signal?: AbortSignal,
 ): Promise<XSearchResult> {
@@ -46,8 +44,6 @@ async function callXSearch(
 	if (options?.excludedXHandles?.length) xSearchTool.excluded_x_handles = options.excludedXHandles;
 	if (options?.fromDate) xSearchTool.from_date = options.fromDate;
 	if (options?.toDate) xSearchTool.to_date = options.toDate;
-	if (options?.enableImageUnderstanding) xSearchTool.enable_image_understanding = true;
-	if (options?.enableVideoUnderstanding) xSearchTool.enable_video_understanding = true;
 
 	const payload = {
 		model: SEARCH_MODEL,
