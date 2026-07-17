@@ -376,7 +376,8 @@ export function sanitizePayload(
 	if (Array.isArray(next.tools)) {
 		const tools = structuredClone(next.tools) as unknown[];
 		stripSlashEnumsFromTools(tools);
-		next.tools = tools.length > 0 ? tools : undefined;
+		if (tools.length > 0) next.tools = tools;
+		else delete next.tools;
 	}
 
 	// Clamp sampling params into xAI's accepted ranges.
