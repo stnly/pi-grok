@@ -25,9 +25,18 @@ interface XSearchResult {
 	citations?: Array<{ url: string; title?: string }>;
 }
 
+/** HTTP failure from the x_search Responses call, carrying the status so the
+ * tool handler can map 401 to a re-login message. */
+export class XSearchHttpError extends Error {
+	constructor(public readonly status: number, body: string) {
+		super(`x_search HTTP ${status}: ${body.slice(0, 500)}`);
+		this.name = "XSearchHttpError";
+	}
+}
+
 // ─── API call ────────────────────────────────────────────────────────────────
 
-async function callXSearch(
+export async function callXSearch(
 	apiKey: string,
 	baseUrl: string,
 	query: string,
@@ -38,8 +47,7 @@ async function callXSearch(
 		toDate?: string;
 	},
 	signal?: AbortSignal,
-): Promise<XSearchResult> {
-	const xSearchTool: Record<string, unknown> = { type: "x_search" };
+): Promise<XSearchResult> {	const xSearchTool: Record<string, unknown> = { type: "x_search" };
 	if (options?.allowedXHandles?.length) xSearchTool.allowed_x_handles = options.allowedXHandles;
 	if (options?.excludedXHandles?.length) xSearchTool.excluded_x_handles = options.excludedXHandles;
 	if (options?.fromDate) xSearchTool.from_date = options.fromDate;
@@ -60,12 +68,14 @@ async function callXSearch(
 			...CLI_PROXY_HEADERS,
 		},
 		body: JSON.stringify(payload),
-		signal,
+		// Bound the call so a stalled proxy never wedges the tool. Combine the
+		// caller's cancel signal with a 30s deadline so either one fires.
+		signal: AbortSignal.any([AbortSignal.timeout(30_000), ...(signal ? [signal] : [])]),
 	});
 
 	if (!response.ok) {
 		const body = await response.text().catch(() => "");
-		throw new Error(`xAI x_search failed (${response.status}): ${body.slice(0, 500)}`);
+		throw new XSearchHttpError(response.status, body);
 	}
 
 	const data = await response.json();
@@ -148,18 +158,30 @@ export function registerXSearchTool(pi: ExtensionAPI) {
 			// subscription path as inference.
 			const baseUrl = CLI_PROXY_BASE_URL;
 
-			const result = await callXSearch(
-				apiKey,
-				baseUrl,
-				params.query,
-				{
-					allowedXHandles: params.allowed_x_handles,
-					excludedXHandles: params.excluded_x_handles,
-					fromDate: params.from_date,
-					toDate: params.to_date,
-				},
-				signal,
-			);
+			let result: XSearchResult;
+			try {
+				result = await callXSearch(
+					apiKey,
+					baseUrl,
+					params.query,
+					{
+						allowedXHandles: params.allowed_x_handles,
+						excludedXHandles: params.excluded_x_handles,
+						fromDate: params.from_date,
+						toDate: params.to_date,
+					},
+					signal,
+				);
+			} catch (err) {
+				const text = err instanceof XSearchHttpError && err.status === 401
+					? "xAI authentication failed. Run /login to re-authenticate."
+					: `x_search failed: ${err instanceof Error ? err.message : String(err)}`;
+				return {
+					content: [{ type: "text", text }],
+					isError: true,
+					details: { status: err instanceof XSearchHttpError ? err.status : undefined },
+				};
+			}
 
 			let text = result.answer;
 			if (result.citations?.length) {
