@@ -42,10 +42,13 @@ export function formatXSearchError(err: unknown): { text: string; status?: numbe
 }
 
 /** HTTP failure from the x_search Responses call, carrying the status so the
- * tool handler can map 401 to a re-login message. */
+ * tool handler can map 401 to a re-login message. The body is read only to
+ * drain the response; the upstream text never lands in the message, which
+ * classifies by status instead so a hostile error page can't push wording
+ * into the tool result. */
 export class XSearchHttpError extends Error {
-	constructor(public readonly status: number, body: string) {
-		super(`x_search HTTP ${status}: ${body.slice(0, 500)}`);
+	constructor(public readonly status: number) {
+		super(`x_search failed: HTTP ${status}`);
 		this.name = "XSearchHttpError";
 	}
 }
@@ -91,8 +94,9 @@ export async function callXSearch(
 	});
 
 	if (!response.ok) {
-		const body = await readBoundedText(response, SEARCH_MAX_RESPONSE_BYTES).catch(() => "");
-		throw new XSearchHttpError(response.status, body);
+		// Drain the body under the byte cap; only the status lands in the error.
+		await readBoundedText(response, SEARCH_MAX_RESPONSE_BYTES).catch(() => undefined);
+		throw new XSearchHttpError(response.status);
 	}
 
 	const data = (await readBoundedJson(response, SEARCH_MAX_RESPONSE_BYTES)) as {

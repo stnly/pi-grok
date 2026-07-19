@@ -52,3 +52,27 @@ export class XaiOAuthError extends Error {
 		this.name = "XaiOAuthError";
 	}
 }
+
+/** Classify an HTTP status from an authenticated xAI endpoint into a
+ * short, user-safe label. Used wherever an error response is surfaced to
+ * the TUI, so raw upstream bodies never leak into the message (they can
+ * carry trace ids, internal endpoint hints, or upstream error context that
+ * the user should not see and the logs should not persist).
+ *
+ * The classifier is intentionally coarse: callers want a label and a hint,
+ * not the upstream's wording. */
+export function classifyHttpStatus(status: number): { code: XaiErrorCode; label: string; fatal: boolean } {
+	if (status === 401 || status === 403) {
+		return { code: XaiErrorCode.PROXY_REQUEST_FAILED, label: "authentication rejected", fatal: true };
+	}
+	if (status === 404) {
+		return { code: XaiErrorCode.PROXY_REQUEST_FAILED, label: "endpoint unavailable", fatal: false };
+	}
+	if (status === 429) {
+		return { code: XaiErrorCode.PROXY_REQUEST_FAILED, label: "rate limited", fatal: false };
+	}
+	if (status >= 500 && status < 600) {
+		return { code: XaiErrorCode.PROXY_REQUEST_FAILED, label: "upstream error", fatal: false };
+	}
+	return { code: XaiErrorCode.PROXY_REQUEST_FAILED, label: `HTTP ${status}`, fatal: false };
+}

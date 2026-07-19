@@ -8,7 +8,7 @@
  */
 
 import { createServer } from "node:http";
-import { XaiErrorCode, XaiOAuthError } from "./errors.js";
+import { XaiErrorCode, XaiOAuthError, classifyHttpStatus } from "./errors.js";
 import { safeFetch, readBoundedText, readBoundedJson } from "./safe-fetch.js";
 import { parseBoundedJson } from "./bounded-json.js";
 
@@ -829,10 +829,18 @@ async function exchangeCode(
 		signal: AbortSignal.timeout(15_000),
 	});
 	if (!response.ok) {
-		const errBody = await readBoundedText(response, AUTH_MAX_RESPONSE_BYTES).catch(() => "");
+		// Surface only the OAuth error code from the body (invalid_grant,
+		// invalid_client, etc.); drop the free-text error_description and any
+		// non-JSON body so upstream wording never lands in the user-facing
+		// message.
+		const errText = await readBoundedText(response, AUTH_MAX_RESPONSE_BYTES).catch(() => "");
+		let oauthError = "";
+		try { oauthError = String((JSON.parse(errText) as { error?: unknown }).error ?? ""); } catch { /* non-JSON */ }
+		const cls = classifyHttpStatus(response.status);
 		throw new XaiOAuthError(
-			`xAI token exchange failed: ${response.status} ${errBody}`,
+			`xAI token exchange failed: ${oauthError || cls.label}`,
 			XaiErrorCode.TOKEN_EXCHANGE_FAILED,
+			cls.fatal,
 		);
 	}
 	let payload: Record<string, unknown>;
@@ -903,10 +911,14 @@ async function requestDeviceCode(signal?: AbortSignal): Promise<DeviceCodeRespon
 		signal: AbortSignal.any([AbortSignal.timeout(15_000), ...(signal ? [signal] : [])]),
 	});
 	if (!response.ok) {
-		const errBody = await readBoundedText(response, AUTH_MAX_RESPONSE_BYTES).catch(() => "");
+		const errText = await readBoundedText(response, AUTH_MAX_RESPONSE_BYTES).catch(() => "");
+		let oauthError = "";
+		try { oauthError = String((JSON.parse(errText) as { error?: unknown }).error ?? ""); } catch { /* non-JSON */ }
+		const cls = classifyHttpStatus(response.status);
 		throw new XaiOAuthError(
-			`xAI device-code request failed: ${response.status} ${errBody}`,
+			`xAI device-code request failed: ${oauthError || cls.label}`,
 			XaiErrorCode.DEVICE_CODE_FAILED,
+			cls.fatal,
 		);
 	}
 	try {
@@ -1278,13 +1290,16 @@ async function refreshOnce(
 		// `invalid_grant` (revoked/expired refresh token) and `invalid_client`
 		// are terminal and need a re-login, while a 400/403 from a transient
 		// server fault should stay retryable. Anything unparseable is treated as
-		// retryable so a blip doesn't force a re-login.
-		let errBody: { error?: string; error_description?: string } = {};
-		const text = await response.text().catch(() => "");
+		// retryable so a blip doesn't force a re-login. The free-text
+		// error_description never lands in the message; only the stable OAuth
+		// error code or a status label surfaces.
+		let errBody: { error?: string } = {};
+		const text = await readBoundedText(response, AUTH_MAX_RESPONSE_BYTES).catch(() => "");
 		try { errBody = JSON.parse(text); } catch { /* non-JSON error body */ }
 		const code = typeof errBody.error === "string" ? errBody.error : "";
 		const isFatal = code === "invalid_grant" || code === "invalid_client";
-		const detail = errBody.error_description || code || `${response.status} ${text}`;
+		const cls = classifyHttpStatus(response.status);
+		const detail = code || cls.label;
 		throw new XaiOAuthError(
 			`xAI token refresh failed: ${detail}`,
 			XaiErrorCode.REFRESH_FAILED,

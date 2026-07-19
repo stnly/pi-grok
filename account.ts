@@ -11,7 +11,7 @@
  * stay unit-testable without touching the network.
  */
 
-import { XaiErrorCode, XaiOAuthError } from "./errors.js";
+import { XaiErrorCode, XaiOAuthError, classifyHttpStatus } from "./errors.js";
 import { CLI_PROXY_BASE_URL, buildProxyHeaders } from "./models.js";
 import { readBoundedJson, readBoundedText, safeFetch } from "./safe-fetch.js";
 
@@ -62,11 +62,16 @@ function proxyHeaders(token: string, json: boolean): Record<string, string> {
 	};
 }
 
+/** Build a user-safe error from a non-ok proxy response. The body is read
+ * under the byte cap only to drain the response; the upstream text never
+ * lands in the message, which classifies by status instead. */
 async function proxyError(prefix: string, res: Response): Promise<never> {
-	const body = await readBoundedText(res, PROXY_MAX_RESPONSE_BYTES).catch(() => "");
+	await readBoundedText(res, PROXY_MAX_RESPONSE_BYTES).catch(() => undefined);
+	const cls = classifyHttpStatus(res.status);
 	throw new XaiOAuthError(
-		`${prefix}: HTTP ${res.status}${body ? ` ${body}` : ""}`,
-		XaiErrorCode.PROXY_REQUEST_FAILED,
+		`${prefix}: ${cls.label}`,
+		cls.code,
+		cls.fatal,
 	);
 }
 

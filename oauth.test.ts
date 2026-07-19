@@ -439,7 +439,11 @@ describe("refresh", () => {
 			} catch (e) {
 				expect((e as XaiOAuthError).code).toBe(XaiErrorCode.REFRESH_FAILED);
 				expect((e as XaiOAuthError).reloginRequired).toBe(true);
-				expect((e as XaiOAuthError).message).toContain("revoked");
+				// Only the stable OAuth error code surfaces; the free-text
+				// error_description ("revoked") is dropped so upstream wording
+				// never lands in the user-facing message.
+				expect((e as XaiOAuthError).message).toContain(error);
+				expect((e as XaiOAuthError).message).not.toContain("revoked");
 			}
 		}
 	});

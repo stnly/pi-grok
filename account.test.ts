@@ -281,7 +281,10 @@ describe("fetchUser", () => {
 		} catch (e) {
 			expect((e as XaiOAuthError).code).toBe(XaiErrorCode.PROXY_REQUEST_FAILED);
 			expect((e as XaiOAuthError).reloginRequired).toBe(false);
-			expect((e as XaiOAuthError).message).toContain("500");
+			// 500 classifies to "upstream error"; the raw body ("boom") must not
+			// leak into the message.
+			expect((e as XaiOAuthError).message).toContain("upstream error");
+			expect((e as XaiOAuthError).message).not.toContain("boom");
 		}
 	});
 

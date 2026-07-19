@@ -79,13 +79,13 @@ describe("callXSearch", () => {
 
 describe("formatXSearchError", () => {
 	it("maps a 401 to a re-login hint carrying the status", () => {
-		const out = formatXSearchError(new XSearchHttpError(401, "unauthorized"));
+		const out = formatXSearchError(new XSearchHttpError(401));
 		expect(out.status).toBe(401);
 		expect(out.text).toMatch(/re-authenticate/i);
 	});
 
 	it("surfaces a non-401 HTTP error message with its status", () => {
-		const out = formatXSearchError(new XSearchHttpError(500, "boom"));
+		const out = formatXSearchError(new XSearchHttpError(500));
 		expect(out.status).toBe(500);
 		expect(out.text).toContain("x_search failed");
 		expect(out.text).toContain("500");
