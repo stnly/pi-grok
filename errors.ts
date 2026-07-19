@@ -4,20 +4,13 @@
  * Codes allow the login flow and stream handlers to distinguish
  * retryable failures (network) from fatal ones (revoked refresh token).
  */
-export class XaiOAuthError extends Error {
-	constructor(
-		message: string,
-		public readonly code: string,
-		public readonly reloginRequired = false,
-	) {
-		super(message);
-		this.name = "XaiOAuthError";
-	}
-}
 
-/** Well-known error codes. */
+/** Well-known error codes. The Const is the runtime value; the type alias
+ * below is the literal union, so `XaiOAuthError.code` narrows to one of
+ * these strings instead of `string`. Add new codes here and the type widens
+ * automatically. */
 export const XaiErrorCode = {
-	/** OIDC discovery failed (network, invalid response). */
+	/** OIDC discovery failed (network, invalid response, missing jwks_uri, alg list without ES256). */
 	DISCOVERY_FAILED: "discovery_failed",
 	/** Discovery endpoint returned a non-xAI origin. */
 	DISCOVERY_INVALID_ORIGIN: "discovery_invalid_origin",
@@ -31,7 +24,7 @@ export const XaiErrorCode = {
 	TOKEN_EXCHANGE_FAILED: "token_exchange_failed",
 	/** Token exchange returned an invalid payload. */
 	TOKEN_EXCHANGE_INVALID: "token_exchange_invalid",
-	/** Returned id_token failed validation (bad JWT, nonce mismatch). */
+	/** Returned id_token failed claim validation (bad JWT, nonce mismatch, expired). */
 	ID_TOKEN_INVALID: "id_token_invalid",
 	/** id_token signature did not verify against the pinned JWKS. */
 	ID_TOKEN_SIGNATURE_INVALID: "id_token_signature_invalid",
@@ -46,3 +39,16 @@ export const XaiErrorCode = {
 	/** Device-code login failed (request rejected, denied, expired, network). */
 	DEVICE_CODE_FAILED: "device_code_failed",
 } as const;
+
+export type XaiErrorCode = (typeof XaiErrorCode)[keyof typeof XaiErrorCode];
+
+export class XaiOAuthError extends Error {
+	constructor(
+		message: string,
+		public readonly code: XaiErrorCode,
+		public readonly reloginRequired = false,
+	) {
+		super(message);
+		this.name = "XaiOAuthError";
+	}
+}
