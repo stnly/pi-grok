@@ -42,6 +42,7 @@ import { runPrivacyPicker } from "./privacy.js";
 import { sanitizePayload } from "./sanitize.js";
 import { XaiOAuthError } from "./errors.js";
 import { registerXSearchTool } from "./x-search-tool.js";
+import { fetchUsage, formatUsageBlock, XaiUsageError } from "./usage.js";
 
 // ─── Stream function ─────────────────────────────────────────────────────────
 
@@ -268,6 +269,36 @@ export default function (pi: ExtensionAPI) {
 				);
 			} catch (err) {
 				ctx.ui.notify(formatProxyError(err, "xAI privacy"), "warning");
+			}
+		},
+	});
+
+	// ── /xai-usage command ────────────────────────────────────────────────
+	pi.registerCommand("xai-usage", {
+		description: "Show xAI subscription credit usage",
+		handler: async (_args, ctx) => {
+			let token: string | undefined;
+			try {
+				token = await ctx.modelRegistry.getApiKeyForProvider("xai-oauth");
+			} catch {
+				token = undefined;
+			}
+			if (!token) {
+				ctx.ui.notify(
+					"xAI: not logged in. Run /login, choose xAI (SuperGrok Subscription).",
+					"warning",
+				);
+				return;
+			}
+
+			try {
+				const snapshot = await fetchUsage(token);
+				ctx.ui.notify(formatUsageBlock(snapshot), "info");
+			} catch (err) {
+				const message = err instanceof XaiUsageError
+					? err.message
+					: `xAI usage lookup failed: ${err instanceof Error ? err.message : String(err)}`;
+				ctx.ui.notify(message, "warning");
 			}
 		},
 	});

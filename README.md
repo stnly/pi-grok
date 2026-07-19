@@ -108,6 +108,18 @@ state, and available model count. The account and privacy fields come
 from the cli-chat-proxy `/user` endpoint using your OAuth token; if the lookup
 fails (offline, expired token) the model count still renders.
 
+## Subscription usage
+
+```
+/xai-usage
+```
+
+Shows subscription credit usage. The command resolves your user id from
+`/user`, then looks up `/billing?format=credits` with that id. Only the
+derived numbers render (percentage, used vs. monthly limit, prepaid
+balance, on-demand totals, tier); the raw billing body is never persisted
+or logged. A failed lookup reports the error without partial data.
+
 ## Coding data privacy
 
 xAI has an account-level setting controlling whether the code and context you
@@ -185,11 +197,15 @@ export PI_XAI_X_SEARCH_MODEL=grok-4.20-0309-reasoning
 pi-grok/
 ├── index.ts           # provider registration + event hooks
 ├── x-search-tool.ts   # x_search tool (separate xAI request)
-├── oauth.ts           # PKCE flow, OIDC discovery, token refresh
+├── oauth.ts           # PKCE flow, OIDC discovery + JWKS, token refresh
 ├── models.ts          # model definitions + live catalog from xAI
+├── catalog-cache.ts   # on-disk cache for the live catalog body (TTL-bounded)
 ├── account.ts         # account + privacy calls (cli-chat-proxy /user, /privacy)
+├── usage.ts           # /xai-usage: subscription credit snapshot from /billing
 ├── privacy.ts         # inline themed privacy picker (ctx.ui.custom, green-tick row)
 ├── sanitize.ts        # strips unsupported fields before each request
+├── bounded-json.ts    # depth/node-bounded JSON parser for untrusted responses
+├── safe-fetch.ts      # fetch wrapper that rejects HTTP redirects
 ├── errors.ts          # typed error classes
 ├── package.json
 └── tsconfig.json
@@ -197,10 +213,14 @@ pi-grok/
 
 - **Payload sanitization via `before_provider_request`** - decoupled from streaming, visible to other extensions, chainable.
 - **X Search tool** - proxy via `pi.registerTool`. Any model can search X. Per-query parameters supported.
-- **Live model catalog** - fetches `cli-chat-proxy.grok.com/v1/models` on login for enrichment (context windows, new ids); routing also goes through the CLI chat proxy so requests ride the SuperGrok quota.
+- **Live model catalog** - fetches `cli-chat-proxy.grok.com/v1/models` on login for enrichment (context windows, new ids); routing also goes through the CLI chat proxy so requests ride the SuperGrok quota. The catalog body is cached on disk with a 15-minute fresh TTL and a 7-day stale-if-transient window, so a cold start shows context windows right away instead of waiting on the proxy.
 - **Account + privacy commands** - `/xai-status` reads the cli-chat-proxy `/user` enrichment for account and retention state; `/xai-privacy` opens an inline themed picker (green-tick current row, matching the login selector) that toggles coding-data-retention via `PUT /privacy/coding-data-retention`.
+- **Subscription usage** - `/xai-usage` resolves the user id from `/user`, then reads `/billing?format=credits`. The response is size-bounded and parsed through a bounded-JSON walker; only the derived numeric fields render.
+- **OIDC signature verification** - `discover()` requires a JWKS URI pinned to the xAI origin and the signing alg ES256. Login and refresh verify id_token signatures against that JWKS via WebCrypto; a kid miss forces one uncached re-fetch so key rotation mid-TTL still works.
+- **Redirect rejection** - every authenticated xAI request goes through a fetch wrapper that sets `redirect: "manual"` and throws on any 3xx, so credentials can't be replayed off the original request URL.
+- **Conversation scopes** - the default OAuth scope set includes `conversations:read` and `conversations:write` so the proxy can attach server-side history to `x-grok-conv-id` multi-turn sessions.
 - **Typed errors** - `XaiOAuthError` with machine-readable codes for distinguishing retryable vs fatal failures.
-- **Web Crypto** - `crypto.subtle` for PKCE.
+- **Web Crypto** - `crypto.subtle` for PKCE and ES256 signature verification.
 
 ## Credits
 
