@@ -245,7 +245,7 @@ export async function discover(): Promise<XaiDiscovery> {
 	if (algs && !algs.includes("ES256")) {
 		throw new XaiOAuthError(
 			"xAI OIDC discovery does not advertise ES256 for id_token signing.",
-			XaiErrorCode.ID_TOKEN_INVALID,
+			XaiErrorCode.DISCOVERY_FAILED,
 		);
 	}
 
@@ -555,8 +555,11 @@ export function validateIdToken(idToken: string, expectedNonce: string): void {
 /** Pinned expected signing algorithm for xAI id_tokens. */
 const ID_TOKEN_EXPECTED_ALG = "ES256";
 
-/** Header parameters that override or extend verification semantics. */
-const ID_TOKEN_FORBIDDEN_HEADER_PARAMS = ["crit", "jku", "jwk", "x5u", "x5c", "x5t"] as const;
+/** Header parameters that override or extend verification semantics.
+ * `b64: false` would let an attacker claim the payload isn't base64url-encoded
+ * and slip content past the signature check on a future code path that
+ * branches on it; the others redirect key resolution or extend the header. */
+const ID_TOKEN_FORBIDDEN_HEADER_PARAMS = ["crit", "jku", "jwk", "x5u", "x5c", "x5t", "b64"] as const;
 
 /** JWKS entries from xAI carry `kid` at runtime; TS's `JsonWebKey` type
  * omits it, so we extend the type rather than casting at each use. */

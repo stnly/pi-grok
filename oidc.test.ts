@@ -237,7 +237,7 @@ describe("verifyIdTokenSignature", () => {
 			}),
 		) as typeof fetch;
 
-		for (const extra of [{ crit: ["exp"] }, { jku: "https://x/jwks" }, { jwk: {} }, { x5u: "https://x/cert" }]) {
+		for (const extra of [{ crit: ["exp"] }, { jku: "https://x/jwks" }, { jwk: {} }, { x5u: "https://x/cert" }, { b64: false }]) {
 			const token = await signedJwt(sign, { alg: "ES256", kid: "k1", ...extra }, { sub: "u1" });
 			await expect(verifyIdTokenSignature(token, JWKS_URI)).rejects.toMatchObject({
 				code: XaiErrorCode.ID_TOKEN_INVALID,

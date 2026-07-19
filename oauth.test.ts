@@ -326,7 +326,7 @@ describe("discover", () => {
 		});
 	});
 
-	it("throws ID_TOKEN_INVALID when the alg list omits ES256", async () => {
+	it("throws DISCOVERY_FAILED when the alg list omits ES256", async () => {
 		globalThis.fetch = vi.fn(async () =>
 			fakeResponse({
 				authorization_endpoint: "https://auth.x.ai/oauth/authorize",
@@ -336,7 +336,7 @@ describe("discover", () => {
 			}),
 		) as typeof fetch;
 		await expect(discover()).rejects.toMatchObject({
-			code: XaiErrorCode.ID_TOKEN_INVALID,
+			code: XaiErrorCode.DISCOVERY_FAILED,
 		});
 	});
 

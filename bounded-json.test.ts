@@ -100,8 +100,12 @@ describe("assertBoundedJson", () => {
 	});
 
 	it("throws BoundedJsonError on a node-count overflow", () => {
+		// Raise the array/key caps so maxNodes is what trips, not maxArrayItems.
+		// Without this, a 2049-item flat array hits the default maxArrayItems=64
+		// first and the test passes for the wrong reason.
+		const opts = { maxArrayItems: 10_000, maxObjectKeys: 10_000 };
 		const arr = Array.from({ length: DEFAULTS.maxNodes + 1 }, (_, i) => i);
-		expect(() => assertBoundedJson(arr)).toThrow(BoundedJsonError);
+		expect(() => assertBoundedJson(arr, opts)).toThrow(BoundedJsonError);
 	});
 
 	it("treats a primitive as in-bounds", () => {
