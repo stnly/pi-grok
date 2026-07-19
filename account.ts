@@ -13,6 +13,7 @@
 
 import { XaiErrorCode, XaiOAuthError } from "./errors.js";
 import { CLI_PROXY_BASE_URL, buildProxyHeaders } from "./models.js";
+import { safeFetch } from "./safe-fetch.js";
 
 /** Request timeout for proxy calls. Account reads should feel instant. */
 const PROXY_TIMEOUT_MS = 10_000;
@@ -71,7 +72,7 @@ async function proxyError(prefix: string, res: Response): Promise<never> {
 export async function fetchUser(token: string): Promise<XaiUser> {
 	let res: Response;
 	try {
-		res = await fetch(`${CLI_PROXY_BASE_URL}/user`, {
+		res = await safeFetch(`${CLI_PROXY_BASE_URL}/user`, {
 			headers: proxyHeaders(token, false),
 			signal: AbortSignal.timeout(PROXY_TIMEOUT_MS),
 		});
@@ -102,7 +103,7 @@ export async function fetchUser(token: string): Promise<XaiUser> {
 export async function setCodingDataRetention(token: string, optOut: boolean): Promise<boolean> {
 	let res: Response;
 	try {
-		res = await fetch(`${CLI_PROXY_BASE_URL}/privacy/coding-data-retention`, {
+		res = await safeFetch(`${CLI_PROXY_BASE_URL}/privacy/coding-data-retention`, {
 			method: "PUT",
 			headers: proxyHeaders(token, true),
 			body: JSON.stringify({ codingDataRetentionOptOut: optOut }),

@@ -13,6 +13,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { CLI_PROXY_BASE_URL, buildProxyHeaders } from "./models.js";
+import { safeFetch } from "./safe-fetch.js";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -74,7 +75,7 @@ export async function callXSearch(
 		store: false,
 	};
 
-	const response = await fetch(`${baseUrl}/responses`, {
+	const response = await safeFetch(`${baseUrl}/responses`, {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",

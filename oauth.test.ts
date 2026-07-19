@@ -310,6 +310,13 @@ describe("discover", () => {
 		}) as typeof fetch;
 		await expect(discover()).rejects.toMatchObject({ code: XaiErrorCode.DISCOVERY_FAILED });
 	});
+
+	it("rejects a 3xx response as DISCOVERY_FAILED (no redirect following)", async () => {
+		globalThis.fetch = vi.fn(async () =>
+			new Response("", { status: 302, headers: { Location: "https://evil.example/leak" } }),
+		) as typeof fetch;
+		await expect(discover()).rejects.toMatchObject({ code: XaiErrorCode.DISCOVERY_FAILED });
+	});
 });
 
 // ─── refresh (mocked fetch) ──────────────────────────────────────────────────

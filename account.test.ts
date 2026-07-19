@@ -293,6 +293,15 @@ describe("fetchUser", () => {
 			code: XaiErrorCode.PROXY_REQUEST_FAILED,
 		});
 	});
+
+	it("rejects a 3xx response as PROXY_REQUEST_FAILED (no redirect following)", async () => {
+		globalThis.fetch = vi.fn(async () =>
+			new Response("", { status: 302, headers: { Location: "https://evil.example/leak" } }),
+		) as typeof fetch;
+		await expect(fetchUser("tok")).rejects.toMatchObject({
+			code: XaiErrorCode.PROXY_REQUEST_FAILED,
+		});
+	});
 });
 
 describe("setCodingDataRetention", () => {

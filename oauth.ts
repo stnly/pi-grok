@@ -9,6 +9,7 @@
 
 import { createServer } from "node:http";
 import { XaiErrorCode, XaiOAuthError } from "./errors.js";
+import { safeFetch } from "./safe-fetch.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -186,7 +187,7 @@ export function validateEndpoint(value: string, field: string): string {
 export async function discover(): Promise<XaiDiscovery> {
 	let response: Response;
 	try {
-		response = await fetch(DISCOVERY_URL, {
+		response = await safeFetch(DISCOVERY_URL, {
 			headers: { Accept: "application/json" },
 			signal: AbortSignal.timeout(15_000),
 		});
@@ -500,7 +501,7 @@ async function exchangeCode(
 	verifier: string,
 	expectedNonce: string,
 ): Promise<XaiOAuthCredentials> {
-	const response = await fetch(tokenEndpoint, {
+	const response = await safeFetch(tokenEndpoint, {
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
 		body: new URLSearchParams({
@@ -566,7 +567,7 @@ async function requestDeviceCode(signal?: AbortSignal): Promise<DeviceCodeRespon
 		scope: SCOPE,
 		referrer: "grok-build",
 	});
-	const response = await fetch(DEVICE_CODE_URL, {
+	const response = await safeFetch(DEVICE_CODE_URL, {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/x-www-form-urlencoded",
@@ -626,7 +627,7 @@ export async function loginDeviceCode(
 			);
 		}
 
-		const response = await fetch(DEVICE_TOKEN_URL, {
+		const response = await safeFetch(DEVICE_TOKEN_URL, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/x-www-form-urlencoded",
@@ -906,7 +907,7 @@ async function refreshOnce(
 	const tokenEndpoint = xai.tokenEndpoint || xai.discovery?.token_endpoint || (await discover()).token_endpoint;
 	validateEndpoint(tokenEndpoint, "token_endpoint");
 
-	const response = await fetch(tokenEndpoint, {
+	const response = await safeFetch(tokenEndpoint, {
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
 		body: new URLSearchParams({

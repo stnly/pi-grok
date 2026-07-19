@@ -4,6 +4,8 @@
  * Hardcoded fallback list + live catalog fetching from the xAI API.
  */
 
+import { safeFetch } from "./safe-fetch.js";
+
 // ─── Cost constants ($/M tokens, base <200k-prompt tier) ───────────────────────
 // From the xAI public pricing page. The cost shape is flat, so the base tier
 // is used; long-context (>=200k prompt) pricing is not modeled. cacheWrite is
@@ -330,7 +332,7 @@ async function fetchLiveCatalog(
 	baseUrl: string,
 ): Promise<{ data?: ApiModelEntry[] } | null> {
 	try {
-		const response = await fetch(`${baseUrl}/models`, {
+		const response = await safeFetch(`${baseUrl}/models`, {
 			headers: {
 				Authorization: `Bearer ${accessToken}`,
 				...buildProxyHeaders(),
