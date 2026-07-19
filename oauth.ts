@@ -948,10 +948,43 @@ export async function loginDeviceCode(
 
 	const device = await requestDeviceCode(signal);
 	const display = device.verification_uri_complete ?? device.verification_uri;
-	callbacks.onAuth({
-		url: display,
-		instructions: `Open ${display} and enter code ${device.user_code}. Or approve at ${device.verification_uri}.`,
-	});
+	// Surface the code to the host. Newer pi-coding-agent (0.80+) provides
+	// onDeviceCode, which renders a dedicated TUI: clickable hyperlink,
+	// highlighted code, and a waiting indicator. Older hosts only have onAuth,
+	// which renders the URL generically. Feature-detect at runtime so we get
+	// the polished UI when available without forcing a dependency bump.
+	type DeviceCodeInfo = {
+		userCode: string;
+		verificationUri: string;
+		intervalSeconds?: number;
+		expiresInSeconds?: number;
+	};
+	type CallbacksWithDeviceCode = import("@earendil-works/pi-ai").OAuthLoginCallbacks & {
+		onDeviceCode?: (info: DeviceCodeInfo) => void;
+	};
+	const cb = callbacks as CallbacksWithDeviceCode;
+	if (typeof cb.onDeviceCode === "function") {
+		cb.onDeviceCode({
+			userCode: device.user_code,
+			verificationUri: display,
+			intervalSeconds: device.interval,
+			expiresInSeconds: device.expires_in,
+		});
+	} else {
+		// Fallback for older hosts without onDeviceCode. The host shows a manual
+		// paste prompt here because usesCallbackServer is true (set for the
+		// browser flow). Device code ignores any pasted value, but we must
+		// consume onManualCodeInput so an Escape during the paste prompt does
+		// not surface as an unhandled rejection and crash pi. The actual cancel
+		// propagates via callbacks.signal, which the poll loop watches.
+		callbacks.onAuth({
+			url: display,
+			instructions: `Open ${display} and enter code ${device.user_code}. Or approve at ${device.verification_uri}.`,
+		});
+		if (typeof callbacks.onManualCodeInput === "function") {
+			callbacks.onManualCodeInput().catch(() => { /* cancel handled via signal */ });
+		}
+	}
 
 	let interval = Math.max(1, device.interval ?? 5);
 	const deadline = Date.now() + Math.max(device.expires_in, 60) * 1000;
@@ -1087,10 +1120,14 @@ export async function login(
 	const { signal } = callbacks;
 	if (signal?.aborted) throw outcomeToError({ kind: "cancelled" });
 
-	// Device-code flow for headless/SSH boxes where a loopback callback is
-	// awkward. Opt in with PI_XAI_LOGIN_METHOD=device; everything else uses
-	// the browser callback + manual-paste race below.
-	if ((process.env.PI_XAI_LOGIN_METHOD || "").toLowerCase() === "device") {
+	// Flow choice: the env var is an explicit override in either direction.
+	// Unset (or any value other than browser/callback), device code is the
+	// default. It works everywhere (no loopback port, no callback server, no
+	// local browser), and newer pi-coding-agent renders it with a dedicated TUI
+	// via onDeviceCode. Browser flow stays available for users who prefer the
+	// auto-redirect, typically on a local machine.
+	const method = (process.env.PI_XAI_LOGIN_METHOD || "device").toLowerCase();
+	if (method !== "browser" && method !== "callback") {
 		return loginDeviceCode(callbacks);
 	}
 

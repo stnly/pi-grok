@@ -127,6 +127,41 @@ describe("loginDeviceCode", () => {
 		expect(creds.refresh).toBe("ref");
 	}, 15_000);
 
+	it("prefers onDeviceCode over onAuth when the host provides it", async () => {
+		const { token, jwk } = await makeSignedIdToken();
+		const captured: { info?: { userCode: string; verificationUri: string; intervalSeconds?: number; expiresInSeconds?: number } } = {};
+		let onAuthCalled = false;
+		const cbs = {
+			onAuth: () => { onAuthCalled = true; },
+			onDeviceCode: (info: { userCode: string; verificationUri: string; intervalSeconds?: number; expiresInSeconds?: number }) => {
+				captured.info = info;
+			},
+			onPrompt: async () => "",
+		} as unknown as import("@earendil-works/pi-ai").OAuthLoginCallbacks;
+		const state: DeviceState = {
+			pendingCount: 0,
+			jwk,
+			tokenResponses: [
+				{ status: 200, body: { access_token: "acc", refresh_token: "ref", id_token: token, expires_in: 3600 } },
+			],
+		};
+		globalThis.fetch = deviceFetch(state, {
+			device_code: "dc", user_code: "ABCD-EFGH",
+			verification_uri: "https://accounts.x.ai/device",
+			verification_uri_complete: "https://accounts.x.ai/device?user_code=ABCD-EFGH",
+			expires_in: 300, interval: 5,
+		});
+
+		await loginDeviceCode(cbs);
+		expect(onAuthCalled).toBe(false);
+		expect(captured.info).toEqual({
+			userCode: "ABCD-EFGH",
+			verificationUri: "https://accounts.x.ai/device?user_code=ABCD-EFGH",
+			intervalSeconds: 5,
+			expiresInSeconds: 300,
+		});
+	}, 15_000);
+
 	it("honors slow_down by continuing to poll", async () => {
 		const { cbs } = callbacks();
 		const state: DeviceState = { pendingCount: 0, tokenResponses: [
