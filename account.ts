@@ -13,10 +13,12 @@
 
 import { XaiErrorCode, XaiOAuthError } from "./errors.js";
 import { CLI_PROXY_BASE_URL, buildProxyHeaders } from "./models.js";
-import { safeFetch } from "./safe-fetch.js";
+import { readBoundedJson, readBoundedText, safeFetch } from "./safe-fetch.js";
 
 /** Request timeout for proxy calls. Account reads should feel instant. */
 const PROXY_TIMEOUT_MS = 10_000;
+/** Reject any proxy response body larger than this before parsing. */
+const PROXY_MAX_RESPONSE_BYTES = 64 * 1024;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -61,7 +63,7 @@ function proxyHeaders(token: string, json: boolean): Record<string, string> {
 }
 
 async function proxyError(prefix: string, res: Response): Promise<never> {
-	const body = await res.text().catch(() => "");
+	const body = await readBoundedText(res, PROXY_MAX_RESPONSE_BYTES).catch(() => "");
 	throw new XaiOAuthError(
 		`${prefix}: HTTP ${res.status}${body ? ` ${body}` : ""}`,
 		XaiErrorCode.PROXY_REQUEST_FAILED,
@@ -90,7 +92,14 @@ export async function fetchUser(token: string): Promise<XaiUser> {
 		);
 	}
 	if (!res.ok) return proxyError("xAI account lookup failed", res);
-	return (await res.json()) as XaiUser;
+	try {
+		return (await readBoundedJson(res, PROXY_MAX_RESPONSE_BYTES)) as XaiUser;
+	} catch (cause) {
+		throw new XaiOAuthError(
+			`xAI account lookup returned an unparseable body: ${cause instanceof Error ? cause.message : String(cause)}`,
+			XaiErrorCode.PROXY_REQUEST_FAILED,
+		);
+	}
 }
 
 /**
@@ -123,7 +132,15 @@ export async function setCodingDataRetention(token: string, optOut: boolean): Pr
 		);
 	}
 	if (!res.ok) return proxyError("xAI privacy update failed", res);
-	const body = (await res.json()) as { codingDataRetentionOptOut?: boolean };
+	let body: { codingDataRetentionOptOut?: boolean };
+	try {
+		body = (await readBoundedJson(res, PROXY_MAX_RESPONSE_BYTES)) as { codingDataRetentionOptOut?: boolean };
+	} catch (cause) {
+		throw new XaiOAuthError(
+			`xAI privacy update returned an unparseable body: ${cause instanceof Error ? cause.message : String(cause)}`,
+			XaiErrorCode.PROXY_REQUEST_FAILED,
+		);
+	}
 	return body.codingDataRetentionOptOut ?? optOut;
 }
 

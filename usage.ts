@@ -38,8 +38,7 @@
 
 import { XaiErrorCode, XaiOAuthError } from "./errors.js";
 import { CLI_PROXY_BASE_URL, buildProxyHeaders } from "./models.js";
-import { safeFetch } from "./safe-fetch.js";
-import { parseBoundedJson } from "./bounded-json.js";
+import { safeFetch, readBoundedJson } from "./safe-fetch.js";
 import { fetchUser } from "./account.js";
 
 /** Bounded response sizes and parse ceilings. */
@@ -395,17 +394,12 @@ export async function fetchUsage(token: string): Promise<XaiUsageSnapshot> {
 		throw new XaiUsageError(`xAI billing lookup returned HTTP ${response.status}.`, "http");
 	}
 
-	const text = await response.text();
-	if (text.length > USAGE_MAX_RESPONSE_BYTES) {
-		throw new XaiUsageError("xAI usage response exceeded the size limit.", "invalid");
-	}
-
 	let parsed: unknown;
 	try {
-		parsed = parseBoundedJson(text);
+		parsed = await readBoundedJson(response, USAGE_MAX_RESPONSE_BYTES);
 	} catch (cause) {
 		throw new XaiUsageError(
-			`xAI usage response was not parseable: ${cause instanceof Error ? cause.message : String(cause)}`,
+			`xAI usage response was unreadable or unparseable: ${cause instanceof Error ? cause.message : String(cause)}`,
 			"invalid",
 		);
 	}

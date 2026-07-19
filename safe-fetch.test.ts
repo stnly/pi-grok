@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { RedirectError, safeFetch } from "./safe-fetch.js";
+import {
+	BoundedJsonError,
+	type BoundedJsonOptions,
+} from "./bounded-json.js";
+import {
+	RedirectError,
+	ResponseSizeError,
+	readBoundedJson,
+	readBoundedText,
+	safeFetch,
+} from "./safe-fetch.js";
 
 describe("safeFetch", () => {
 	const originalFetch = globalThis.fetch;
@@ -116,5 +126,86 @@ describe("RedirectError", () => {
 
 	it("is named RedirectError", () => {
 		expect(new RedirectError("x").name).toBe("RedirectError");
+	});
+});
+
+// ─── readBoundedText ─────────────────────────────────────────────────────────
+
+describe("readBoundedText", () => {
+	it("returns the full body when it fits under the cap", async () => {
+		const res = new Response("hello world", { status: 200 });
+		await expect(readBoundedText(res, 1024)).resolves.toBe("hello world");
+	});
+
+	it("returns the body when its length equals the cap", async () => {
+		const res = new Response("abc", { status: 200 });
+		await expect(readBoundedText(res, 3)).resolves.toBe("abc");
+	});
+
+	it("throws ResponseSizeError when the body exceeds the cap", async () => {
+		const res = new Response("hello world", { status: 200 });
+		await expect(readBoundedText(res, 5)).rejects.toBeInstanceOf(ResponseSizeError);
+	});
+
+	it("exposes the configured maxBytes on the error", async () => {
+		const res = new Response("x".repeat(100), { status: 200 });
+		try {
+			await readBoundedText(res, 16);
+			throw new Error("should have thrown");
+		} catch (e) {
+			expect(e).toBeInstanceOf(ResponseSizeError);
+			expect((e as ResponseSizeError).maxBytes).toBe(16);
+		}
+	});
+
+	it("rejects a body that is not valid UTF-8", async () => {
+		// 0xff is invalid as the first byte of a UTF-8 sequence.
+		const res = new Response(new Uint8Array([0xff, 0xfe]), { status: 200 });
+		await expect(readBoundedText(res, 1024)).rejects.toThrow();
+	});
+
+	it("streams a chunked body and caps as soon as the cap is crossed", async () => {
+		// Build a streaming body that emits two chunks; the second one pushes
+		// the total past the cap so the read must reject mid-stream.
+		const encoder = new TextEncoder();
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(encoder.encode("four"));
+				controller.enqueue(encoder.encode("more"));
+				controller.close();
+			},
+		});
+		const res = new Response(stream, { status: 200 });
+		// "four" alone is 4 bytes; total after "more" is 8. Cap at 6 trips it.
+		await expect(readBoundedText(res, 6)).rejects.toBeInstanceOf(ResponseSizeError);
+	});
+});
+
+// ─── readBoundedJson ─────────────────────────────────────────────────────────
+
+describe("readBoundedJson", () => {
+	const opts: BoundedJsonOptions = { maxDepth: 4, maxNodes: 64, maxArrayItems: 8, maxObjectKeys: 8 };
+
+	it("parses a small JSON body that fits the byte and shape caps", async () => {
+		const res = new Response(JSON.stringify({ a: 1, b: [2, 3] }), { status: 200 });
+		await expect(readBoundedJson(res, 1024, opts)).resolves.toEqual({ a: 1, b: [2, 3] });
+	});
+
+	it("throws ResponseSizeError before parsing when the body is too large", async () => {
+		const res = new Response("x".repeat(100), { status: 200 });
+		await expect(readBoundedJson(res, 16, opts)).rejects.toBeInstanceOf(ResponseSizeError);
+	});
+
+	it("throws BoundedJsonError when the body parses but exceeds the shape caps", async () => {
+		// Valid JSON, but nested deeper than maxDepth=4.
+		let deep: unknown = { v: 1 };
+		for (let i = 0; i < 10; i++) deep = { nested: deep };
+		const res = new Response(JSON.stringify(deep), { status: 200 });
+		await expect(readBoundedJson(res, 1024, opts)).rejects.toBeInstanceOf(BoundedJsonError);
+	});
+
+	it("throws BoundedJsonError on invalid JSON", async () => {
+		const res = new Response("{not json", { status: 200 });
+		await expect(readBoundedJson(res, 1024, opts)).rejects.toBeInstanceOf(BoundedJsonError);
 	});
 });

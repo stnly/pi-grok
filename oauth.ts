@@ -9,7 +9,7 @@
 
 import { createServer } from "node:http";
 import { XaiErrorCode, XaiOAuthError } from "./errors.js";
-import { safeFetch } from "./safe-fetch.js";
+import { safeFetch, readBoundedText, readBoundedJson } from "./safe-fetch.js";
 import { parseBoundedJson } from "./bounded-json.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -34,6 +34,9 @@ const CALLBACK_PATH = "/callback";
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
 /** Tolerance for id_token exp against issuer clock drift. */
 const ID_TOKEN_CLOCK_SKEW_MS = 30_000;
+/** Reject any auth-path response body larger than this before parsing.
+ * Covers OIDC discovery, token exchange, refresh, device code, JWKS. */
+const AUTH_MAX_RESPONSE_BYTES = 64 * 1024;
 
 /** Parse the callback-port override, falling back to the default on anything invalid. */
 export function parseCallbackPort(raw: string | undefined): number {
@@ -208,7 +211,15 @@ export async function discover(): Promise<XaiDiscovery> {
 			XaiErrorCode.DISCOVERY_FAILED,
 		);
 	}
-	const payload = (await response.json()) as Record<string, unknown>;
+	let payload: Record<string, unknown>;
+	try {
+		payload = (await readBoundedJson(response, AUTH_MAX_RESPONSE_BYTES)) as Record<string, unknown>;
+	} catch (cause) {
+		throw new XaiOAuthError(
+			`xAI OIDC discovery returned an unparseable body: ${cause instanceof Error ? cause.message : String(cause)}`,
+			XaiErrorCode.DISCOVERY_FAILED,
+		);
+	}
 	const authorizationEndpoint = validateEndpoint(String(payload.authorization_endpoint ?? ""), "authorization_endpoint");
 	const tokenEndpoint = validateEndpoint(String(payload.token_endpoint ?? ""), "token_endpoint");
 
@@ -626,10 +637,12 @@ export async function fetchJwks(jwksUri: string, opts: { force?: boolean } = {})
 			XaiErrorCode.ID_TOKEN_INVALID,
 		);
 	}
-	const text = await response.text();
-	if (text.length > JWKS_MAX_RESPONSE_BYTES) {
+	let text: string;
+	try {
+		text = await readBoundedText(response, JWKS_MAX_RESPONSE_BYTES);
+	} catch (cause) {
 		throw new XaiOAuthError(
-			"xAI JWKS response exceeded the size limit.",
+			`xAI JWKS response exceeded the size limit or was unreadable: ${cause instanceof Error ? cause.message : String(cause)}`,
 			XaiErrorCode.ID_TOKEN_INVALID,
 		);
 	}
@@ -813,12 +826,21 @@ async function exchangeCode(
 		signal: AbortSignal.timeout(15_000),
 	});
 	if (!response.ok) {
+		const errBody = await readBoundedText(response, AUTH_MAX_RESPONSE_BYTES).catch(() => "");
 		throw new XaiOAuthError(
-			`xAI token exchange failed: ${response.status} ${await response.text()}`,
+			`xAI token exchange failed: ${response.status} ${errBody}`,
 			XaiErrorCode.TOKEN_EXCHANGE_FAILED,
 		);
 	}
-	const payload = (await response.json()) as Record<string, unknown>;
+	let payload: Record<string, unknown>;
+	try {
+		payload = (await readBoundedJson(response, AUTH_MAX_RESPONSE_BYTES)) as Record<string, unknown>;
+	} catch (cause) {
+		throw new XaiOAuthError(
+			`xAI token exchange returned an unparseable body: ${cause instanceof Error ? cause.message : String(cause)}`,
+			XaiErrorCode.TOKEN_EXCHANGE_INVALID,
+		);
+	}
 	const access = String(payload.access_token ?? "");
 	const refresh = String(payload.refresh_token ?? "");
 	if (!access) {
@@ -878,12 +900,20 @@ async function requestDeviceCode(signal?: AbortSignal): Promise<DeviceCodeRespon
 		signal: AbortSignal.any([AbortSignal.timeout(15_000), ...(signal ? [signal] : [])]),
 	});
 	if (!response.ok) {
+		const errBody = await readBoundedText(response, AUTH_MAX_RESPONSE_BYTES).catch(() => "");
 		throw new XaiOAuthError(
-			`xAI device-code request failed: ${response.status} ${await response.text()}`,
+			`xAI device-code request failed: ${response.status} ${errBody}`,
 			XaiErrorCode.DEVICE_CODE_FAILED,
 		);
 	}
-	return (await response.json()) as DeviceCodeResponse;
+	try {
+		return (await readBoundedJson(response, AUTH_MAX_RESPONSE_BYTES)) as DeviceCodeResponse;
+	} catch (cause) {
+		throw new XaiOAuthError(
+			`xAI device-code response was not parseable: ${cause instanceof Error ? cause.message : String(cause)}`,
+			XaiErrorCode.DEVICE_CODE_FAILED,
+		);
+	}
 }
 
 /** Run the OAuth 2.0 device-authorization grant. Surfaces the verification URI
@@ -949,12 +979,22 @@ export async function loginDeviceCode(
 		});
 
 		if (response.ok) {
-			const payload = (await response.json()) as Record<string, unknown>;
+			let payload: Record<string, unknown>;
+			try {
+				payload = (await readBoundedJson(response, AUTH_MAX_RESPONSE_BYTES)) as Record<string, unknown>;
+			} catch (cause) {
+				throw new XaiOAuthError(
+					`xAI device token response was not parseable: ${cause instanceof Error ? cause.message : String(cause)}`,
+					XaiErrorCode.DEVICE_CODE_FAILED,
+					true,
+				);
+			}
 			return await shapeDeviceToken(payload, DEVICE_TOKEN_URL, discovery.jwks_uri);
 		}
 
 		let errBody: { error?: string; error_description?: string } = {};
-		try { errBody = await response.json(); } catch { /* non-JSON error */ }
+		const errText = await readBoundedText(response, AUTH_MAX_RESPONSE_BYTES).catch(() => "");
+		try { errBody = JSON.parse(errText); } catch { /* non-JSON error */ }
 		switch (errBody.error) {
 			case "authorization_pending":
 				continue;
@@ -1249,7 +1289,16 @@ async function refreshOnce(
 		);
 	}
 
-	const payload = (await response.json()) as Record<string, unknown>;
+	let payload: Record<string, unknown>;
+	try {
+		payload = (await readBoundedJson(response, AUTH_MAX_RESPONSE_BYTES)) as Record<string, unknown>;
+	} catch (cause) {
+		throw new XaiOAuthError(
+			`xAI token refresh returned an unparseable body: ${cause instanceof Error ? cause.message : String(cause)}`,
+			XaiErrorCode.REFRESH_FAILED,
+			true,
+		);
+	}
 	const access = String(payload.access_token ?? "");
 	if (!access) {
 		throw new XaiOAuthError(

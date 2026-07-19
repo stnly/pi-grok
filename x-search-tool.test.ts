@@ -13,18 +13,13 @@ const OK_RESPONSE = {
 };
 
 function mockFetchOk(body: unknown) {
-	return vi.fn().mockResolvedValue({
-		ok: true,
-		json: async () => body,
-	} as unknown as Response);
+	return vi.fn().mockResolvedValue(
+		new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }),
+	);
 }
 
 function mockFetchStatus(status: number, body = "") {
-	return vi.fn().mockResolvedValue({
-		ok: false,
-		status,
-		text: async () => body,
-	} as unknown as Response);
+	return vi.fn().mockResolvedValue(new Response(body, { status }) as unknown as Response);
 }
 
 describe("callXSearch", () => {

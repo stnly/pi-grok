@@ -13,11 +13,13 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { CLI_PROXY_BASE_URL, buildProxyHeaders } from "./models.js";
-import { safeFetch } from "./safe-fetch.js";
+import { readBoundedJson, readBoundedText, safeFetch } from "./safe-fetch.js";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 const SEARCH_MODEL = process.env.PI_XAI_X_SEARCH_MODEL ?? "grok-4.5";
+/** Reject any x_search response body larger than this before parsing. */
+const SEARCH_MAX_RESPONSE_BYTES = 256 * 1024;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -89,17 +91,18 @@ export async function callXSearch(
 	});
 
 	if (!response.ok) {
-		const body = await response.text().catch(() => "");
+		const body = await readBoundedText(response, SEARCH_MAX_RESPONSE_BYTES).catch(() => "");
 		throw new XSearchHttpError(response.status, body);
 	}
 
-	const data = await response.json();
+	const data = (await readBoundedJson(response, SEARCH_MAX_RESPONSE_BYTES)) as {
+		output?: Array<{ type: string; content?: Array<{ type: string; text?: string }> }>;
+		citations?: Array<{ url: string; title?: string }>;
+	};
 
 	// Extract text from the Responses API output
-	const outputItems: Array<{ type: string; content?: Array<{ type: string; text?: string }> }> =
-		data.output ?? [];
 	const textParts: string[] = [];
-	for (const item of outputItems) {
+	for (const item of data.output ?? []) {
 		if (item.type === "message" && Array.isArray(item.content)) {
 			for (const part of item.content) {
 				if (part.type === "output_text" && part.text) {
@@ -110,10 +113,8 @@ export async function callXSearch(
 	}
 
 	const citations: XSearchResult["citations"] = [];
-	if (Array.isArray(data.citations)) {
-		for (const c of data.citations) {
-			if (c.url) citations.push({ url: c.url, title: c.title });
-		}
+	for (const c of data.citations ?? []) {
+		if (c.url) citations.push({ url: c.url, title: c.title });
 	}
 
 	return {
