@@ -1,10 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
 	CATALOG_CACHE_SCHEMA_VERSION,
 	CATALOG_FRESH_TTL_MS,
 	CATALOG_MAX_STALE_MS,
 	loadCachedCatalog,
 	serializeCatalog,
+	writeCachedCatalog,
 } from "./catalog-cache.js";
 
 describe("serializeCatalog / loadCachedCatalog", () => {
@@ -102,5 +106,67 @@ describe("serializeCatalog / loadCachedCatalog", () => {
 		// A fetchedAt 100 years in the future is not a real timestamp.
 		const text = serializeCatalog({ data: [] }, Date.now() + 100 * 365 * 24 * 60 * 60 * 1000);
 		expect(loadCachedCatalog(text, { fetchedAt: 0, now: Date.now() })).toBeNull();
+	});
+});
+
+describe("writeCachedCatalog", () => {
+	let tmpDir: string;
+	let cachePath: string;
+
+	beforeEach(async () => {
+		tmpDir = await mkdtemp(join(tmpdir(), "pi-grok-cache-"));
+		cachePath = join(tmpDir, "cache", "pi-grok", "models.json");
+	});
+	afterEach(async () => {
+		await rm(tmpDir, { recursive: true, force: true });
+	});
+
+	it("writes a readable cache file with the serialized body", async () => {
+		await writeCachedCatalog(cachePath, { data: [{ id: "grok-4.5" }] }, 1_700_000_000_000);
+		const text = await readFile(cachePath, "utf8");
+		const loaded = loadCachedCatalog(text, { fetchedAt: 0, now: 1_700_000_001_000 });
+		expect(loaded?.body).toEqual({ data: [{ id: "grok-4.5" }] });
+		expect(loaded?.fetchedAt).toBe(1_700_000_000_000);
+	});
+
+	it("is a no-op when the cache path is empty", async () => {
+		// No throw, no file written. The empty path represents a missing agent
+		// directory; writing next to the process cwd would be wrong.
+		await expect(writeCachedCatalog("", { data: [] }, Date.now())).resolves.toBeUndefined();
+	});
+
+	it("does not collide when two concurrent writes target the same path", async () => {
+		// Two concurrent writes used to share `${cachePath}.${pid}.tmp`. The
+		// second write would truncate the temp file mid-flight, the first rename
+		// could land a partial file, and the survivor on disk was racy. The fix
+		// is a per-call random suffix; the assertion is that both writes resolve
+		// and the final file on disk is one of the two bodies, parseable whole.
+		const bodyA = { data: [{ id: "grok-a" }] };
+		const bodyB = { data: [{ id: "grok-b" }] };
+		await Promise.all([
+			writeCachedCatalog(cachePath, bodyA, 1_700_000_000_000),
+			writeCachedCatalog(cachePath, bodyB, 1_700_000_001_000),
+		]);
+		const text = await readFile(cachePath, "utf8");
+		const loaded = loadCachedCatalog(text, { fetchedAt: 0, now: 1_700_000_002_000 });
+		expect(loaded).not.toBeNull();
+		const ids = (loaded!.body as { data?: Array<{ id: string }> }).data?.map((e) => e.id) ?? [];
+		// Either body could win the race; the invariant is that exactly one
+		// whole body lands (either ["grok-a"] or ["grok-b"]), not a mix.
+		expect(ids.length).toBe(1);
+		expect(["grok-a", "grok-b"]).toContain(ids[0]);
+		// Sanity: the file contains exactly one schemaVersion field. A truncate-
+		// then-rename mix would surface as two concatenated JSON objects.
+		const versionMatches = text.match(/"schemaVersion"/g) ?? [];
+		expect(versionMatches).toHaveLength(1);
+	});
+
+	it("overwrites an existing cache file atomically", async () => {
+		await mkdir(join(tmpDir, "cache", "pi-grok"), { recursive: true });
+		await writeFile(cachePath, "corrupt", "utf8");
+		await writeCachedCatalog(cachePath, { data: [] }, 1_700_000_000_000);
+		const text = await readFile(cachePath, "utf8");
+		expect(text).not.toBe("corrupt");
+		expect(loadCachedCatalog(text, { fetchedAt: 0, now: 1_700_000_001_000 })).not.toBeNull();
 	});
 });

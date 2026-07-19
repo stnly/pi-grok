@@ -16,6 +16,7 @@
 
 import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { randomUUID } from "node:crypto";
 import { parseBoundedJson, type BoundedJsonOptions } from "./bounded-json.js";
 
 /** Bumped whenever the on-disk shape changes. Older files are ignored. */
@@ -140,7 +141,12 @@ export async function writeCachedCatalog(
 	if (!cachePath) return;
 
 	const text = serializeCatalog(body, fetchedAt);
-	const tmpPath = `${cachePath}.${process.pid}.tmp`;
+	// Two concurrent fetches (re-login then token rotation within the same tick,
+	// or a superseded-but-still-running discovery worker) can both reach the
+	// write step. process.pid disambiguates across processes but not within
+	// one, so a per-call random suffix keeps the temp files distinct and the
+	// final rename lands a whole file rather than a truncate-then-rename mix.
+	const tmpPath = `${cachePath}.${process.pid}.${randomUUID()}.tmp`;
 	try {
 		await mkdir(dirname(cachePath), { recursive: true });
 		await writeFile(tmpPath, text, { mode: 0o600 });
