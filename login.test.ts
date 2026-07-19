@@ -82,12 +82,91 @@ function mockFetch(idToken: string, jwk: JsonWebKey) {
 	}) as unknown as typeof fetch;
 }
 
+describe("login flow dispatch", () => {
+	const realFetch = globalThis.fetch;
+
+	afterEach(() => {
+		globalThis.fetch = realFetch;
+		delete process.env.PI_XAI_LOGIN_METHOD;
+	});
+
+	it("dispatches to device code by default (no env var)", async () => {
+		delete process.env.PI_XAI_LOGIN_METHOD;
+		let hitDeviceEndpoint = false;
+		globalThis.fetch = (async (input: string | URL | Request) => {
+			const url = String(input);
+			if (url.includes("/.well-known/openid-configuration")) {
+				return new Response(JSON.stringify({
+					authorization_endpoint: "https://auth.x.ai/oauth/authorize",
+					token_endpoint: "https://auth.x.ai/oauth/token",
+					jwks_uri: "https://auth.x.ai/.well-known/jwks.json",
+					id_token_signing_alg_values_supported: ["ES256"],
+				}), { status: 200, headers: { "Content-Type": "application/json" } });
+			}
+			if (url.includes("/oauth2/device/code")) {
+				hitDeviceEndpoint = true;
+				return new Response(JSON.stringify({
+					device_code: "dc", user_code: "ABCD-EFGH",
+					verification_uri: "https://accounts.x.ai/device",
+					expires_in: 300, interval: 0,
+				}), { status: 200, headers: { "Content-Type": "application/json" } });
+			}
+			// Token poll: return pending forever; we only care that device code
+			// was chosen, not that the flow completes.
+			return new Response(JSON.stringify({ error: "authorization_pending" }), { status: 400 });
+		}) as typeof fetch;
+
+		const promise = login({
+			onAuth: () => {},
+			onDeviceCode: () => {},
+			onPrompt: async () => "",
+			signal: AbortSignal.timeout(200),
+		} as unknown as import("@earendil-works/pi-ai").OAuthLoginCallbacks);
+		try { await promise; } catch { /* expected: abort or pending */ }
+		expect(hitDeviceEndpoint).toBe(true);
+	});
+
+	it("dispatches to browser flow when PI_XAI_LOGIN_METHOD=callback", async () => {
+		process.env.PI_XAI_LOGIN_METHOD = "callback";
+		let hitAuthorize = false;
+		globalThis.fetch = (async (input: string | URL | Request) => {
+			const url = String(input);
+			if (url.startsWith("http://127.0.0.1:")) {
+				return realFetch(input);
+			}
+			if (url.includes("/oauth2/device/code")) {
+				return new Response(JSON.stringify({ error: "authorization_pending" }), { status: 400 });
+			}
+			// Discovery returns minimal doc; the authorize URL is constructed but
+			// never fetched (browser opens it). Just flag that we got past the
+			// device-code branch.
+			hitAuthorize = true;
+			return new Response(JSON.stringify({
+				authorization_endpoint: "https://auth.x.ai/oauth/authorize",
+				token_endpoint: "https://auth.x.ai/oauth/token",
+				jwks_uri: "https://auth.x.ai/.well-known/jwks.json",
+			}), { status: 200, headers: { "Content-Type": "application/json" } });
+		}) as typeof fetch;
+
+		const promise = login({
+			onAuth: () => {},
+			onPrompt: async () => "",
+			signal: AbortSignal.timeout(200),
+		});
+		try { await promise; } catch { /* expected: abort */ }
+		expect(hitAuthorize).toBe(true);
+	});
+});
+
 describe("login (callback server integration)", () => {
 	const realFetch = globalThis.fetch;
 	let signed: { token: string; jwk: JsonWebKey };
 
 	beforeEach(async () => {
 		resetJwksCacheForTests();
+		// Force the browser callback flow. The default is now device code, but
+		// this suite exercises the loopback server path specifically.
+		process.env.PI_XAI_LOGIN_METHOD = "callback";
 		// id_token has no nonce claim: validateIdToken only checks nonce when present.
 		signed = await makeSignedIdToken();
 		const mocked = mockFetch(signed.token, signed.jwk);
@@ -103,6 +182,7 @@ describe("login (callback server integration)", () => {
 		globalThis.fetch = realFetch;
 		resetJwksCacheForTests();
 		vi.restoreAllMocks();
+		delete process.env.PI_XAI_LOGIN_METHOD;
 	});
 
 	it("drives the loopback callback, exchanges the code, and returns credentials", async () => {

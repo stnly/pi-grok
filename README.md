@@ -156,7 +156,7 @@ If your organization enforces Zero Data Retention, the choice is locked and
 | `PI_XAI_OAUTH_MODELS` | all models |
 | `PI_XAI_OAUTH_CALLBACK_PORT` | `56121` |
 | `PI_XAI_OAUTH_CLIENT_ID` | built-in |
-| `PI_XAI_LOGIN_METHOD` | `callback` (browser + paste). Set `device` to use the OAuth device flow, which avoids the loopback callback on headless/SSH boxes. |
+| `PI_XAI_LOGIN_METHOD` | `device` (OAuth device flow, works everywhere). Set `callback` (or `browser`) to use the browser + loopback-callback flow instead, which auto-redirects but needs a reachable `127.0.0.1` port and a local browser. |
 | `PI_XAI_CLIENT_VERSION` | `0.2.101` (client version label sent to the proxy) |
 | `PI_XAI_CLIENT_NAME` | `grok-shell` (session product label sent to the proxy) |
 | `XAI_OAUTH_TOKEN` | skip OAuth, use raw token (no refresh, no discovery; proxy routing still applies) |
