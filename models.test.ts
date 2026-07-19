@@ -1,4 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
 	COST_45,
 	FALLBACK_MODELS,
@@ -14,6 +17,7 @@ import {
 	supportsReasoningEffort,
 	thinkingLevelMapFor,
 	triggerDiscovery,
+	_setCatalogCachePathForTests,
 } from "./models.js";
 
 describe("FALLBACK_MODELS", () => {
@@ -250,6 +254,7 @@ describe("mergeLiveModels", () => {
 describe("applyDiscoveredModels + env filter", () => {
 	beforeEach(() => {
 		resetDiscoveryForTests();
+		_setCatalogCachePathForTests("");
 	});
 
 	afterEach(() => {
@@ -279,6 +284,7 @@ describe("applyDiscoveredModels + env filter", () => {
 describe("rebuildModelsForOAuth", () => {
 	beforeEach(() => {
 		resetDiscoveryForTests();
+		_setCatalogCachePathForTests("");
 	});
 
 	afterEach(() => {
@@ -440,6 +446,7 @@ describe("discovery cache", () => {
 
 	beforeEach(() => {
 		resetDiscoveryForTests();
+		_setCatalogCachePathForTests("");
 	});
 
 	afterEach(() => {
@@ -594,5 +601,123 @@ describe("discovery cache", () => {
 			Authorization: "Bearer token",
 			"X-XAI-Token-Auth": "xai-grok-cli",
 		});
+	});
+});
+
+describe("on-disk catalog cache", () => {
+	const originalFetch = globalThis.fetch;
+	let tmpDir: string;
+	let cachePath: string;
+
+	beforeAll(async () => {
+		tmpDir = await mkdtemp(join(tmpdir(), "pi-grok-cache-"));
+		cachePath = join(tmpDir, "cache", "pi-grok", "models.json");
+	});
+	afterAll(async () => {
+		await rm(tmpDir, { recursive: true, force: true });
+	});
+
+	beforeEach(() => {
+		resetDiscoveryForTests();
+		_setCatalogCachePathForTests(cachePath);
+		globalThis.fetch = vi.fn(async (url: string | URL | Request) => {
+			const u = String(url);
+			if (!u.endsWith("/models")) return new Response("not found", { status: 404 });
+			return new Response(JSON.stringify({ data: [
+				{ id: "grok-live", context_length: 800_000, max_output_tokens: 32_000 },
+			] }), { status: 200, headers: { "Content-Type": "application/json" } });
+		}) as typeof fetch;
+	});
+	afterEach(() => {
+		resetDiscoveryForTests();
+		globalThis.fetch = originalFetch;
+	});
+
+	it("adopts a fresh on-disk cache as the in-memory state before fetching", async () => {
+		// Seed the cache with a fresh body for a model the network mock does not
+		// return. With the network fetch held pending, the only way the id lands
+		// in the in-memory catalog is via the disk seed.
+		await mkdir(join(tmpDir, "cache", "pi-grok"), { recursive: true });
+		const seeded = {
+			schemaVersion: 1,
+			fetchedAt: Date.now(),
+			body: { data: [{ id: "grok-seeded-from-disk", context_length: 100_000 }] },
+		};
+		await writeFile(cachePath, JSON.stringify(seeded), "utf8");
+
+		// Hold the network response so it cannot race the disk load.
+		let _resolveLive: (r: Response) => void = () => {};
+		const held = new Promise<Response>((r) => { _resolveLive = r; });
+		globalThis.fetch = vi.fn(async () => held) as typeof fetch;
+
+		triggerDiscovery("token", CLI_PROXY_URL);
+		const deadline = Date.now() + 1000;
+		while (!mergeDiscoveredModels(FALLBACK_MODELS).some((m) => m.id === "grok-seeded-from-disk") && Date.now() < deadline) {
+			await new Promise((r) => setTimeout(r, 10));
+		}
+		expect(mergeDiscoveredModels(FALLBACK_MODELS).some((m) => m.id === "grok-seeded-from-disk")).toBe(true);
+
+		// Release the fetch so the worker resolves cleanly and the in-flight
+		// flag clears for the next test.
+		_resolveLive(new Response(JSON.stringify({ data: [{ id: "grok-live" }] }), {
+			status: 200, headers: { "Content-Type": "application/json" },
+		}));
+	});
+
+	it("writes a successful fetch to the cache file", async () => {
+		triggerDiscovery("token", CLI_PROXY_URL);
+		// Wait for the fetch to land and the disk write to flush.
+		const deadline = Date.now() + 2000;
+		while (!mergeDiscoveredModels(FALLBACK_MODELS).some((m) => m.id === "grok-live") && Date.now() < deadline) {
+			await new Promise((r) => setTimeout(r, 20));
+		}
+		// Disk write is fire-and-forget; give it a moment.
+		await new Promise((r) => setTimeout(r, 100));
+
+		const text = await readFile(cachePath, "utf8");
+		const parsed = JSON.parse(text);
+		expect(parsed.schemaVersion).toBe(1);
+		expect(parsed.body.data[0].id).toBe("grok-live");
+		expect(parsed.fetchedAt).toBeGreaterThan(0);
+	});
+
+	it("ignores a corrupt cache file and falls back to the live fetch", async () => {
+		await mkdir(join(tmpDir, "cache", "pi-grok"), { recursive: true });
+		await writeFile(cachePath, "not-json", "utf8");
+
+		triggerDiscovery("token", CLI_PROXY_URL);
+		const deadline = Date.now() + 2000;
+		while (!mergeDiscoveredModels(FALLBACK_MODELS).some((m) => m.id === "grok-live") && Date.now() < deadline) {
+			await new Promise((r) => setTimeout(r, 20));
+		}
+		expect(mergeDiscoveredModels(FALLBACK_MODELS).some((m) => m.id === "grok-live")).toBe(true);
+	});
+
+	it("treats a stale cache as usable and flags it for refresh", async () => {
+		// Body is just past the 15-minute fresh TTL but inside the 7-day stale window.
+		const stale = {
+			schemaVersion: 1,
+			fetchedAt: Date.now() - 20 * 60 * 1000,
+			body: { data: [{ id: "grok-stale-from-disk", context_length: 100_000 }] },
+		};
+		await mkdir(join(tmpDir, "cache", "pi-grok"), { recursive: true });
+		await writeFile(cachePath, JSON.stringify(stale), "utf8");
+
+		// Hold the network fetch so the stale disk body stays visible.
+		let _resolveLive: (r: Response) => void = () => {};
+		const held = new Promise<Response>((r) => { _resolveLive = r; });
+		globalThis.fetch = vi.fn(async () => held) as typeof fetch;
+
+		triggerDiscovery("token", CLI_PROXY_URL);
+		const deadline = Date.now() + 1000;
+		while (!mergeDiscoveredModels(FALLBACK_MODELS).some((m) => m.id === "grok-stale-from-disk") && Date.now() < deadline) {
+			await new Promise((r) => setTimeout(r, 10));
+		}
+		expect(mergeDiscoveredModels(FALLBACK_MODELS).some((m) => m.id === "grok-stale-from-disk")).toBe(true);
+		expect(discoveryStatus().lastError).toMatch(/stale|refreshing/i);
+
+		_resolveLive(new Response(JSON.stringify({ data: [{ id: "grok-live" }] }), {
+			status: 200, headers: { "Content-Type": "application/json" },
+		}));
 	});
 });

@@ -5,6 +5,15 @@
  */
 
 import { safeFetch } from "./safe-fetch.js";
+import {
+	CATALOG_BOUNDED_JSON_OPTIONS,
+	loadCachedCatalog,
+	writeCachedCatalog,
+} from "./catalog-cache.js";
+import { parseBoundedJson } from "./bounded-json.js";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { join } from "node:path";
+import { readFile } from "node:fs/promises";
 
 // ─── Cost constants ($/M tokens, base <200k-prompt tier) ───────────────────────
 // From the xAI public pricing page. The cost shape is flat, so the base tier
@@ -38,6 +47,21 @@ export interface XaiModelConfig {
 
 // CLI proxy base URL for models not available on the public API.
 export const CLI_PROXY_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
+
+/** On-disk cache path for the live catalog body. Resolves the agent directory
+ * at first use; tests can override via _setCatalogCachePathForTests. Returns
+ * an empty string when the agent directory can't be resolved (eg. running
+ * the unit tests outside a pi install). */
+function defaultCatalogCachePath(): string {
+	try {
+		return join(getAgentDir(), "cache", "pi-grok", "models.json");
+	} catch {
+		return "";
+	}
+}
+
+/** Path used for the on-disk cache. Overridable for tests via _setCatalogCachePathForTests. */
+let catalogCachePath = defaultCatalogCachePath();
 
 /**
  * Client version label sent on cli-chat-proxy requests. The proxy rejects
@@ -326,6 +350,9 @@ export async function fetchLiveModels(
 	return body ? mergeLiveModels(FALLBACK_MODELS, body) : null;
 }
 
+/** Reject a live `/models` body larger than this before parsing. */
+const CATALOG_MAX_RESPONSE_BYTES = 256 * 1024;
+
 /** Fetch and return the raw `/models` body, or null on any failure. */
 async function fetchLiveCatalog(
 	accessToken: string,
@@ -340,7 +367,11 @@ async function fetchLiveCatalog(
 			signal: AbortSignal.timeout(10_000),
 		});
 		if (!response.ok) return null;
-		return (await response.json()) as { data?: ApiModelEntry[] };
+		const text = await response.text();
+		if (text.length > CATALOG_MAX_RESPONSE_BYTES) return null;
+		const parsed = parseBoundedJson(text, CATALOG_BOUNDED_JSON_OPTIONS);
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+		return parsed as { data?: ApiModelEntry[] };
 	} catch {
 		return null;
 	}
@@ -361,6 +392,7 @@ let discoveryInFlight: Promise<void> | null = null;
 let discoveryLastToken: string | null = null;
 let discoveryLastError: string | null = null;
 let discoveryFetchedAt = 0; // epoch ms of the last successful fetch, 0 = never
+let discoveryLoadedFromDisk = false; // true after the first attempt to read the disk cache
 
 /**
  * Merge the discovered catalog into a base list. Returns `base` unchanged
@@ -408,9 +440,24 @@ export function triggerDiscovery(accessToken: string, baseUrl: string): void {
 	// the promise that is still current clears discoveryInFlight (identity
 	// check, run from a chained finally so the worker never self-references).
 	if (discoveryInFlight && discoveryLastToken === accessToken) return;
+
+	// On the first trigger, adopt the on-disk cache as the initial in-memory
+	// state before issuing the network request. The first cold pi start
+	// otherwise shows the hardcoded fallback list until the fetch resolves;
+	// seeding from disk surfaces context windows and newly released ids at
+	// once. A stale disk cache is adopted here (the fetch below refreshes it);
+	// an expired or missing disk cache is a no-op.
+	const seed = discoveryLoadedFromDisk
+		? Promise.resolve()
+		: (() => {
+			discoveryLoadedFromDisk = true;
+			return loadCatalogFromDisk();
+		})();
+
 	discoveryLastToken = accessToken;
 	const myToken = accessToken;
 	const p: Promise<void> = (async () => {
+		await seed; // never overwrite an in-memory state the disk load hasn't seen
 		try {
 			const body = await fetchLiveCatalog(accessToken, baseUrl);
 			if (discoveryLastToken !== myToken) return; // superseded by a newer token
@@ -418,6 +465,7 @@ export function triggerDiscovery(accessToken: string, baseUrl: string): void {
 				discoveredBody = body;
 				discoveryLastError = null;
 				discoveryFetchedAt = Date.now();
+				void writeCachedCatalog(catalogCachePath, body, discoveryFetchedAt);
 			} else if (body === null) {
 				// fetchLiveCatalog returns null on network/HTTP failure; record so
 				// /xai-status can explain why the catalog looks stale.
@@ -432,6 +480,37 @@ export function triggerDiscovery(accessToken: string, baseUrl: string): void {
 	p.finally(() => {
 		if (discoveryInFlight === p) discoveryInFlight = null;
 	});
+}
+
+/** Read the on-disk cache and adopt it as the in-memory state when it is
+ * fresh or stale-but-not-expired. Failures (missing file, parse error, expired)
+ * are swallowed: the caller still has the hardcoded fallback list to work
+ * with, and the next network fetch will overwrite whatever we adopted. */
+async function loadCatalogFromDisk(): Promise<void> {
+	if (!catalogCachePath) return;
+	let text: string;
+	try {
+		text = await readFile(catalogCachePath, "utf8");
+	} catch {
+		return; // missing or unreadable: silently use the fallback list
+	}
+	const loaded = loadCachedCatalog(text, {
+		fetchedAt: discoveryFetchedAt,
+		now: Date.now(),
+	});
+	if (!loaded) return;
+	if (!isCatalogBody(loaded.body)) return;
+	discoveredBody = loaded.body;
+	if (loaded.source === "stale-cache") {
+		// Surfacing stale data while the network refresh runs; flag the state
+		// so /xai-status can show why the catalog looks older than expected.
+		discoveryLastError = "cache stale; refreshing";
+	}
+}
+
+/** Narrows an unknown disk-cached body to the catalog shape mergeLiveModels expects. */
+function isCatalogBody(body: unknown): body is { data?: ApiModelEntry[] } {
+	return !!body && typeof body === "object" && !Array.isArray(body);
 }
 
 /** Snapshot of the discovery cache for `/xai-status`. `cold` means no
@@ -465,6 +544,14 @@ export function resetDiscoveryForTests(): void {
 	discoveryLastToken = null;
 	discoveryLastError = null;
 	discoveryFetchedAt = 0;
+	discoveryLoadedFromDisk = false;
+}
+
+/** Override the cache path (and reset the loaded-from-disk flag) for tests.
+ * Pass an empty string to disable disk caching entirely. */
+export function _setCatalogCachePathForTests(path: string): void {
+	catalogCachePath = path;
+	discoveryLoadedFromDisk = false;
 }
 
 /**
