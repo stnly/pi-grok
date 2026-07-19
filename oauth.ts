@@ -21,7 +21,9 @@ const DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
 /** Client version label sent on the device-code auth requests. */
 const CLIENT_VERSION = process.env.PI_XAI_CLIENT_VERSION || "0.2.101";
 const CLIENT_ID = process.env.PI_XAI_OAUTH_CLIENT_ID || "b1a00492-073a-47ea-816f-4c329264a828";
-const SCOPE = process.env.PI_XAI_OAUTH_SCOPE || "openid profile email offline_access grok-cli:access api:access";
+// conversations:read/write let the proxy attach session history to
+// x-grok-conv-id so multi-turn OAuth chats can resume server-side state.
+const SCOPE = process.env.PI_XAI_OAUTH_SCOPE || "openid profile email offline_access grok-cli:access api:access conversations:read conversations:write";
 const CALLBACK_HOST = process.env.PI_XAI_OAUTH_CALLBACK_HOST || "127.0.0.1";
 const DEFAULT_CALLBACK_PORT = 56121;
 const CALLBACK_PORT = parseCallbackPort(process.env.PI_XAI_OAUTH_CALLBACK_PORT);
