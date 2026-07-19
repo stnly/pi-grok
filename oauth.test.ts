@@ -279,12 +279,56 @@ describe("discover", () => {
 			fakeResponse({
 				authorization_endpoint: "https://auth.x.ai/oauth/authorize",
 				token_endpoint: "https://auth.x.ai/oauth/token",
+				jwks_uri: "https://auth.x.ai/.well-known/jwks.json",
+				id_token_signing_alg_values_supported: ["ES256"],
 			}),
 		) as typeof fetch;
 
 		const d = await discover();
 		expect(d.authorization_endpoint).toBe("https://auth.x.ai/oauth/authorize");
 		expect(d.token_endpoint).toBe("https://auth.x.ai/oauth/token");
+		expect(d.jwks_uri).toBe("https://auth.x.ai/.well-known/jwks.json");
+		expect(d.id_token_signing_alg_values_supported).toEqual(["ES256"]);
+	});
+
+	it("throws DISCOVERY_FAILED when the server omits jwks_uri", async () => {
+		globalThis.fetch = vi.fn(async () =>
+			fakeResponse({
+				authorization_endpoint: "https://auth.x.ai/oauth/authorize",
+				token_endpoint: "https://auth.x.ai/oauth/token",
+			}),
+		) as typeof fetch;
+
+		await expect(discover()).rejects.toMatchObject({
+			code: XaiErrorCode.DISCOVERY_FAILED,
+		});
+	});
+
+	it("throws DISCOVERY_INVALID_ORIGIN when jwks_uri points off-origin", async () => {
+		globalThis.fetch = vi.fn(async () =>
+			fakeResponse({
+				authorization_endpoint: "https://auth.x.ai/oauth/authorize",
+				token_endpoint: "https://auth.x.ai/oauth/token",
+				jwks_uri: "https://evil.example/jwks.json",
+			}),
+		) as typeof fetch;
+		await expect(discover()).rejects.toMatchObject({
+			code: XaiErrorCode.DISCOVERY_INVALID_ORIGIN,
+		});
+	});
+
+	it("throws ID_TOKEN_INVALID when the alg list omits ES256", async () => {
+		globalThis.fetch = vi.fn(async () =>
+			fakeResponse({
+				authorization_endpoint: "https://auth.x.ai/oauth/authorize",
+				token_endpoint: "https://auth.x.ai/oauth/token",
+				jwks_uri: "https://auth.x.ai/.well-known/jwks.json",
+				id_token_signing_alg_values_supported: ["RS256"],
+			}),
+		) as typeof fetch;
+		await expect(discover()).rejects.toMatchObject({
+			code: XaiErrorCode.ID_TOKEN_INVALID,
+		});
 	});
 
 	it("throws DISCOVERY_FAILED on a non-ok response", async () => {
@@ -430,6 +474,7 @@ describe("refresh", () => {
 				return fakeResponse({
 					authorization_endpoint: "https://auth.x.ai/oauth/authorize",
 					token_endpoint: "https://auth.x.ai/oauth/token",
+					jwks_uri: "https://auth.x.ai/.well-known/jwks.json",
 				});
 			}
 			return fakeResponse({ access_token: "new", expires_in: 3600 });

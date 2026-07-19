@@ -10,6 +10,7 @@
 import { createServer } from "node:http";
 import { XaiErrorCode, XaiOAuthError } from "./errors.js";
 import { safeFetch } from "./safe-fetch.js";
+import { parseBoundedJson } from "./bounded-json.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -46,6 +47,10 @@ export function parseCallbackPort(raw: string | undefined): number {
 export interface XaiDiscovery {
 	authorization_endpoint: string;
 	token_endpoint: string;
+	/** JWKS URI for id_token signature verification (required, validated xAI origin). */
+	jwks_uri: string;
+	/** Signing algorithm xAI advertises for id_tokens (must be ES256). */
+	id_token_signing_alg_values_supported?: string[];
 }
 
 export interface XaiOAuthCredentials {
@@ -206,7 +211,39 @@ export async function discover(): Promise<XaiDiscovery> {
 	const payload = (await response.json()) as Record<string, unknown>;
 	const authorizationEndpoint = validateEndpoint(String(payload.authorization_endpoint ?? ""), "authorization_endpoint");
 	const tokenEndpoint = validateEndpoint(String(payload.token_endpoint ?? ""), "token_endpoint");
-	return { authorization_endpoint: authorizationEndpoint, token_endpoint: tokenEndpoint };
+
+	// Pin the JWKS URI to the xAI origin so a MITM'd discovery response can't
+	// point id_token verification at an attacker-controlled key set. jwks_uri
+	// is required here: without it, signature verification cannot run, and a
+	// stripped discovery document would fail open to claims-only checks.
+	const jwksUriRaw = payload.jwks_uri;
+	if (typeof jwksUriRaw !== "string" || !jwksUriRaw) {
+		throw new XaiOAuthError(
+			"xAI OIDC discovery omitted jwks_uri; id_token signature verification requires it.",
+			XaiErrorCode.DISCOVERY_FAILED,
+		);
+	}
+	const jwksUri = validateEndpoint(jwksUriRaw, "jwks_uri");
+
+	// xAI's pinned signing algorithm is ES256. If the discovery response
+	// advertises a set, refuse anything that does not include ES256 so a
+	// weaker alg can't slip in via discovery.
+	const algs = Array.isArray(payload.id_token_signing_alg_values_supported)
+		? payload.id_token_signing_alg_values_supported.filter((a): a is string => typeof a === "string")
+		: undefined;
+	if (algs && !algs.includes("ES256")) {
+		throw new XaiOAuthError(
+			"xAI OIDC discovery does not advertise ES256 for id_token signing.",
+			XaiErrorCode.ID_TOKEN_INVALID,
+		);
+	}
+
+	return {
+		authorization_endpoint: authorizationEndpoint,
+		token_endpoint: tokenEndpoint,
+		jwks_uri: jwksUri,
+		id_token_signing_alg_values_supported: algs,
+	};
 }
 
 // ─── Loopback callback server ────────────────────────────────────────────────
@@ -428,7 +465,7 @@ function computeExpires(accessToken: string, expiresInSec: number): number {
 }
 
 /**
- * Validate the id_token returned in the token exchange.
+ * Validate the id_token claims returned in the token exchange.
  *
  * - `iss` must be the xAI issuer (or a sub-path of it).
  * - `aud` must contain our client_id.
@@ -440,6 +477,9 @@ function computeExpires(accessToken: string, expiresInSec: number): number {
  * Returns on success; throws `ID_TOKEN_INVALID` on any mismatch.
  * If no id_token is present, this is a no-op (the provider may legitimately
  * omit it).
+ *
+ * Claims only. Signature verification lives in `verifyIdTokenSignature`,
+ * which callers invoke separately when a JWKS URI is available.
  */
 export function validateIdToken(idToken: string, expectedNonce: string): void {
 	const claims = decodeIdToken(idToken);
@@ -492,7 +532,258 @@ export function validateIdToken(idToken: string, expectedNonce: string): void {
 	}
 }
 
-// ─── Token exchange ───────────────────────────────────────────────────────────
+// ─── id_token signature verification ───────────────────────────────────────
+
+/** Pinned expected signing algorithm for xAI id_tokens. */
+const ID_TOKEN_EXPECTED_ALG = "ES256";
+
+/** Header parameters that override or extend verification semantics. */
+const ID_TOKEN_FORBIDDEN_HEADER_PARAMS = ["crit", "jku", "jwk", "x5u", "x5c", "x5t"] as const;
+
+/** JWKS entries from xAI carry `kid` at runtime; TS's `JsonWebKey` type
+ * omits it, so we extend the type rather than casting at each use. */
+interface XaiJwk extends JsonWebKey {
+	kid?: string;
+}
+
+/** In-memory JWKS cache. Bounded by TTL so a key rotation propagates. */
+const JWKS_TTL_MS = 60 * 60 * 1000; // 1 hour
+let jwksCache: { uri: string; keys: XaiJwk[]; fetchedAt: number } | null = null;
+
+/** Return the cached JWKS for the current URI, or null when no fetch has run. */
+export function getCachedJwks(): XaiJwk[] | null {
+	return jwksCache && Date.now() - jwksCache.fetchedAt < JWKS_TTL_MS ? jwksCache.keys : null;
+}
+
+/** Drop the JWKS cache. Tests only. */
+export function resetJwksCacheForTests(): void {
+	jwksCache = null;
+}
+
+/** Accepted Content-Type values for a JWKS response (RFC 7517 §5). */
+const JWKS_CONTENT_TYPES = new Set(["application/json", "application/jwk-set+json"]);
+
+/** Reject a JWKS body larger than this before parsing. */
+const JWKS_MAX_RESPONSE_BYTES = 64 * 1024;
+
+/**
+ * Fetch and cache the JWKS for `jwksUri`.
+ *
+ * The URI must already be pinned to the xAI origin (validated by discover()).
+ * The response must be `application/json` or `application/jwk-set+json` with a
+ * `keys` array. Private-key parameters (`d` on EC keys) are dropped: a public
+ * key set has no business carrying them, and their presence would let a
+ * compromised endpoint hand us a key it controls end-to-end.
+ *
+ * A failed fetch does not poison the cache, so the next call retries.
+ * Pass `force: true` to bypass the TTL (used once on kid-miss during verify).
+ */
+export async function fetchJwks(jwksUri: string, opts: { force?: boolean } = {}): Promise<XaiJwk[]> {
+	// Defense in depth: discover() validates the URI before caching it, but
+	// fetchJwks is also exported, so reject non-xAI origins here too. A
+	// caller can't accidentally (or maliciously) point verification at an
+	// off-origin key set.
+	validateEndpoint(jwksUri, "jwks_uri");
+
+	if (
+		!opts.force
+		&& jwksCache
+		&& jwksCache.uri === jwksUri
+		&& Date.now() - jwksCache.fetchedAt < JWKS_TTL_MS
+	) {
+		return jwksCache.keys;
+	}
+
+	let response: Response;
+	try {
+		response = await safeFetch(jwksUri, {
+			headers: { Accept: "application/json, application/jwk-set+json" },
+			signal: AbortSignal.timeout(10_000),
+		});
+	} catch (cause) {
+		throw new XaiOAuthError(
+			`xAI JWKS fetch failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+			XaiErrorCode.ID_TOKEN_INVALID,
+		);
+	}
+	if (!response.ok) {
+		throw new XaiOAuthError(
+			`xAI JWKS fetch returned ${response.status}`,
+			XaiErrorCode.ID_TOKEN_INVALID,
+		);
+	}
+	const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+	if (!contentType || !JWKS_CONTENT_TYPES.has(contentType)) {
+		throw new XaiOAuthError(
+			"xAI JWKS response was not application/json or application/jwk-set+json.",
+			XaiErrorCode.ID_TOKEN_INVALID,
+		);
+	}
+	const text = await response.text();
+	if (text.length > JWKS_MAX_RESPONSE_BYTES) {
+		throw new XaiOAuthError(
+			"xAI JWKS response exceeded the size limit.",
+			XaiErrorCode.ID_TOKEN_INVALID,
+		);
+	}
+	let parsed: unknown;
+	try {
+		// JWKS is a small, flat key set; shared defaults are enough.
+		parsed = parseBoundedJson(text);
+	} catch (cause) {
+		throw new XaiOAuthError(
+			`xAI JWKS response was not valid JSON: ${cause instanceof Error ? cause.message : String(cause)}`,
+			XaiErrorCode.ID_TOKEN_INVALID,
+		);
+	}
+	const obj = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+		? (parsed as Record<string, unknown>)
+		: null;
+	const keysRaw = obj?.keys;
+	if (!Array.isArray(keysRaw)) {
+		throw new XaiOAuthError(
+			"xAI JWKS response did not contain a keys array.",
+			XaiErrorCode.ID_TOKEN_INVALID,
+		);
+	}
+	const keys = keysRaw.filter((k): k is XaiJwk =>
+		!!k && typeof k === "object" && !Array.isArray(k) && !("d" in k),
+	).map((k) => k as XaiJwk);
+
+	jwksCache = { uri: jwksUri, keys, fetchedAt: Date.now() };
+	return keys;
+}
+
+/** Decode the protected header of a JWT without verifying it. */
+function decodeJwtHeader(token: string): Record<string, unknown> | null {
+	const parts = token.split(".");
+	if (parts.length !== 3) return null;
+	try {
+		const b64 = parts[0]!.replace(/-/g, "+").replace(/_/g, "/");
+		const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+		return JSON.parse(atob(padded)) as Record<string, unknown>;
+	} catch {
+		return null;
+	}
+}
+
+function base64urlToBytes(b64url: string): Uint8Array<ArrayBuffer> {
+	const b64 = b64url.replace(/-/g, "+").replace(/_/g, "/");
+	const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
+	const binary = atob(padded);
+	const buffer = new ArrayBuffer(binary.length);
+	const bytes = new Uint8Array(buffer);
+	for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+	return bytes;
+}
+
+/**
+ * Verify an id_token's ES256 signature against the JWKS at `jwksUri`.
+ *
+ * The token's header must declare `alg: ES256`, must not carry any header
+ * parameter that could redirect key resolution (`jku`, `jwk`, `x5u`, `x5c`,
+ * `x5t`) or extension (`crit`), and must reference a key in the JWKS by `kid`
+ * (or, when `kid` is absent, resolve against a single-key JWKS). The signature
+ * is then verified with WebCrypto over the SHA-256 hash of the signing input.
+ *
+ * On kid miss against a cached JWKS, one forced re-fetch runs so a mid-TTL key
+ * rotation does not fail every fresh login. A second miss is fatal.
+ *
+ * Throws ID_TOKEN_SIGNATURE_INVALID for signature/key failures, and
+ * ID_TOKEN_INVALID for malformed tokens or forbidden header params.
+ */
+export async function verifyIdTokenSignature(idToken: string, jwksUri: string): Promise<void> {
+	const parts = idToken.split(".");
+	if (parts.length !== 3) {
+		throw new XaiOAuthError(
+			"xAI id_token is not a signed JWT.",
+			XaiErrorCode.ID_TOKEN_INVALID,
+		);
+	}
+	const [headerB64, payloadB64, sigB64] = parts as [string, string, string];
+
+	const header = decodeJwtHeader(idToken);
+	if (!header) {
+		throw new XaiOAuthError(
+			"xAI id_token header was unparseable.",
+			XaiErrorCode.ID_TOKEN_INVALID,
+		);
+	}
+	if (header.alg !== ID_TOKEN_EXPECTED_ALG) {
+		throw new XaiOAuthError(
+			`xAI id_token header declared alg \`${header.alg ?? "(missing)"}\`, expected ${ID_TOKEN_EXPECTED_ALG}.`,
+			XaiErrorCode.ID_TOKEN_INVALID,
+		);
+	}
+	for (const param of ID_TOKEN_FORBIDDEN_HEADER_PARAMS) {
+		if (param in header) {
+			throw new XaiOAuthError(
+				`xAI id_token header carries unsupported parameter \`${param}\`.`,
+				XaiErrorCode.ID_TOKEN_INVALID,
+			);
+		}
+	}
+
+	const kid = typeof header.kid === "string" ? header.kid : undefined;
+	let keys = await fetchJwks(jwksUri);
+	let candidates = kid ? keys.filter((k) => k.kid === kid) : keys;
+
+	// Key rotation can land a new kid while the TTL still holds the old set.
+	// Force one uncached fetch on miss, then fail if the kid is still absent.
+	if (candidates.length === 0 && kid) {
+		keys = await fetchJwks(jwksUri, { force: true });
+		candidates = keys.filter((k) => k.kid === kid);
+	}
+
+	if (candidates.length === 0) {
+		throw new XaiOAuthError(
+			kid ? `xAI id_token kid \`${kid}\` is not present in the JWKS.` : "xAI JWKS has no keys to match against.",
+			XaiErrorCode.ID_TOKEN_SIGNATURE_INVALID,
+		);
+	}
+	if (!kid && candidates.length > 1) {
+		throw new XaiOAuthError(
+			"xAI id_token header omitted kid but the JWKS contains multiple keys.",
+			XaiErrorCode.ID_TOKEN_SIGNATURE_INVALID,
+		);
+	}
+
+	const signingInput = new TextEncoder().encode(`${headerB64}.${payloadB64}`);
+	const signature = base64urlToBytes(sigB64);
+
+	let verified = false;
+	for (const candidate of candidates) {
+		try {
+			const key = await crypto.subtle.importKey(
+				"jwk",
+				candidate,
+				{ name: "ECDSA", namedCurve: "P-256" },
+				false,
+				["verify"],
+			);
+			if (await crypto.subtle.verify(
+				{ name: "ECDSA", hash: "SHA-256" },
+				key,
+				signature,
+				signingInput,
+			)) {
+				verified = true;
+				break;
+			}
+		} catch {
+			// Skip keys that fail to import (wrong kty/crv/params). A well-formed
+			// JWKS won't include them, but a malformed one should not crash login.
+		}
+	}
+	if (!verified) {
+		throw new XaiOAuthError(
+			"xAI id_token signature did not verify against the pinned JWKS.",
+			XaiErrorCode.ID_TOKEN_SIGNATURE_INVALID,
+		);
+	}
+}
+
+// ─── Token exchange ──────────────────────────────────────────────────────────
 
 async function exchangeCode(
 	tokenEndpoint: string,
@@ -500,6 +791,7 @@ async function exchangeCode(
 	redirectUri: string,
 	verifier: string,
 	expectedNonce: string,
+	jwksUri: string,
 ): Promise<XaiOAuthCredentials> {
 	const response = await safeFetch(tokenEndpoint, {
 		method: "POST",
@@ -538,6 +830,7 @@ async function exchangeCode(
 	const idToken = String(payload.id_token ?? "");
 	if (idToken) {
 		validateIdToken(idToken, expectedNonce);
+		await verifyIdTokenSignature(idToken, jwksUri);
 	}
 	return {
 		access,
@@ -595,6 +888,12 @@ export async function loginDeviceCode(
 	const { signal } = callbacks;
 	if (signal?.aborted) throw outcomeToError({ kind: "cancelled" });
 
+	// Resolve discovery up front so the device flow can verify the id_token
+	// signature against the pinned JWKS, the same way the browser flow does.
+	// A discovery failure fails the login rather than silently skipping
+	// signature verification.
+	const discovery = await discover();
+
 	const device = await requestDeviceCode(signal);
 	const display = device.verification_uri_complete ?? device.verification_uri;
 	callbacks.onAuth({
@@ -644,7 +943,7 @@ export async function loginDeviceCode(
 
 		if (response.ok) {
 			const payload = (await response.json()) as Record<string, unknown>;
-			return shapeDeviceToken(payload, DEVICE_TOKEN_URL);
+			return await shapeDeviceToken(payload, DEVICE_TOKEN_URL, discovery.jwks_uri);
 		}
 
 		let errBody: { error?: string; error_description?: string } = {};
@@ -678,11 +977,13 @@ export async function loginDeviceCode(
 
 /** Shape a device-flow token response into stored credentials. Mirrors the
  * exchange path: validates the id_token when present (device flow carries no
- * nonce, and validateIdToken only checks nonce when the claim is present). */
-function shapeDeviceToken(
+ * nonce, and validateIdToken only checks nonce when the claim is present),
+ * then verifies the id_token signature against the pinned JWKS. */
+async function shapeDeviceToken(
 	payload: Record<string, unknown>,
 	tokenEndpoint: string,
-): import("@earendil-works/pi-ai").OAuthCredentials {
+	jwksUri: string,
+): Promise<import("@earendil-works/pi-ai").OAuthCredentials> {
 	const access = String(payload.access_token ?? "");
 	if (!access) {
 		throw new XaiOAuthError(
@@ -701,7 +1002,10 @@ function shapeDeviceToken(
 	}
 	const expiresIn = typeof payload.expires_in === "number" ? payload.expires_in : Number(payload.expires_in ?? 3600);
 	const idToken = String(payload.id_token ?? "");
-	if (idToken) validateIdToken(idToken, "");
+	if (idToken) {
+		validateIdToken(idToken, "");
+		await verifyIdTokenSignature(idToken, jwksUri);
+	}
 	return {
 		access,
 		refresh,
@@ -854,6 +1158,7 @@ export async function login(
 			callback.redirectUri,
 			verifier,
 			nonce,
+			discovery.jwks_uri,
 		);
 		credentials.discovery = discovery;
 		return credentials;
@@ -950,13 +1255,24 @@ async function refreshOnce(
 	const refresh_new = String(payload.refresh_token ?? credentials.refresh);
 	const expiresIn = typeof payload.expires_in === "number" ? payload.expires_in : Number(payload.expires_in ?? 3600);
 
+	// When the AS rotates the id_token on refresh, re-validate claims and
+	// signature the same way login does. Fall back to the previous id_token
+	// when the response omits one.
+	const previousIdToken = typeof xai.idToken === "string" ? xai.idToken : "";
+	const idToken = String(payload.id_token ?? previousIdToken);
+	if (payload.id_token) {
+		const jwksUri = xai.discovery?.jwks_uri || (await discover()).jwks_uri;
+		validateIdToken(idToken, "");
+		await verifyIdTokenSignature(idToken, jwksUri);
+	}
+
 	return {
 		...xai,
 		access,
 		refresh: refresh_new,
 		expires: computeExpires(access, expiresIn),
 		tokenEndpoint,
-		idToken: String(payload.id_token ?? xai.idToken ?? ""),
+		idToken,
 		tokenType: String(payload.token_type ?? xai.tokenType ?? "Bearer"),
 		baseUrl: getBaseUrl(),
 	};

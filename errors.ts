@@ -33,6 +33,8 @@ export const XaiErrorCode = {
 	TOKEN_EXCHANGE_INVALID: "token_exchange_invalid",
 	/** Returned id_token failed validation (bad JWT, nonce mismatch). */
 	ID_TOKEN_INVALID: "id_token_invalid",
+	/** id_token signature did not verify against the pinned JWKS. */
+	ID_TOKEN_SIGNATURE_INVALID: "id_token_signature_invalid",
 	/** Refresh token is missing or empty. */
 	REFRESH_MISSING: "refresh_missing",
 	/** Token refresh failed (expired, revoked). */

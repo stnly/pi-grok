@@ -1,32 +1,71 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OAuthLoginCallbacks } from "@earendil-works/pi-ai";
-import { loginDeviceCode } from "./oauth.js";
+import { loginDeviceCode, resetJwksCacheForTests } from "./oauth.js";
 import { XaiErrorCode } from "./errors.js";
 
 const DEVICE_CODE_URL = "https://auth.x.ai/oauth2/device/code";
 const DEVICE_TOKEN_URL = "https://auth.x.ai/oauth2/token";
+const DISCOVERY_URL = "https://auth.x.ai/.well-known/openid-configuration";
+const JWKS_URI = "https://auth.x.ai/.well-known/jwks.json";
+const CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
 
 function b64url(obj: unknown): string {
 	return btoa(JSON.stringify(obj)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
-function idToken(): string {
-	return `${b64url({ alg: "none" })}.${b64url({
+
+function bufferToB64url(buffer: ArrayBuffer): string {
+	const bytes = new Uint8Array(buffer);
+	let binary = "";
+	for (const b of bytes) binary += String.fromCharCode(b);
+	return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** Real ES256 id_token + matching JWKS entry for signature verification. */
+async function makeSignedIdToken(): Promise<{ token: string; jwk: JsonWebKey }> {
+	const pair = await crypto.subtle.generateKey(
+		{ name: "ECDSA", namedCurve: "P-256" },
+		true,
+		["sign", "verify"],
+	);
+	const jwk = await crypto.subtle.exportKey("jwk", pair.publicKey);
+	const header = b64url({ alg: "ES256", kid: "k1" });
+	const payload = b64url({
 		iss: "https://auth.x.ai",
-		aud: "b1a00492-073a-47ea-816f-4c329264a828",
+		aud: CLIENT_ID,
 		exp: Math.floor(Date.now() / 1000) + 3600,
-	})}.sig`;
+	});
+	const sig = await crypto.subtle.sign(
+		{ name: "ECDSA", hash: "SHA-256" },
+		pair.privateKey,
+		new TextEncoder().encode(`${header}.${payload}`),
+	);
+	return { token: `${header}.${payload}.${bufferToB64url(sig)}`, jwk };
 }
 
 interface DeviceState {
 	pendingCount: number;
 	tokenResponses: { status: number; body: unknown }[];
+	jwk?: JsonWebKey;
 }
 
-/** Build a fetch mock: one device-code response, then a queue of token-poll
- * responses (consumed in order). */
+/** Build a fetch mock: discovery (with required jwks_uri), JWKS, device-code,
+ * then a queue of token-poll responses (consumed in order). */
 function deviceFetch(state: DeviceState, codeResponse: unknown) {
-	return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+	return vi.fn(async (input: string | URL | Request) => {
 		const url = String(input);
+		if (url === DISCOVERY_URL) {
+			return new Response(JSON.stringify({
+				authorization_endpoint: "https://auth.x.ai/oauth2/authorize",
+				token_endpoint: "https://auth.x.ai/oauth2/token",
+				jwks_uri: JWKS_URI,
+			}), { status: 200, headers: { "Content-Type": "application/json" } });
+		}
+		if (url === JWKS_URI) {
+			const keys = state.jwk ? [{ ...state.jwk, kid: "k1", alg: "ES256" }] : [];
+			return new Response(JSON.stringify({ keys }), {
+				status: 200, headers: { "Content-Type": "application/json" },
+			});
+		}
 		if (url === DEVICE_CODE_URL) {
 			return new Response(JSON.stringify(codeResponse), {
 				status: 200, headers: { "Content-Type": "application/json" },
@@ -54,15 +93,26 @@ function callbacks(signal?: AbortSignal): { cbs: OAuthLoginCallbacks; auth: { ur
 describe("loginDeviceCode", () => {
 	const realFetch = globalThis.fetch;
 
-	beforeEach(() => { vi.restoreAllMocks(); });
-	afterEach(() => { globalThis.fetch = realFetch; });
+	beforeEach(() => {
+		vi.restoreAllMocks();
+		resetJwksCacheForTests();
+	});
+	afterEach(() => {
+		globalThis.fetch = realFetch;
+		resetJwksCacheForTests();
+	});
 
 	it("surfaces the verification URI + user code, then exchanges after approval", async () => {
+		const { token, jwk } = await makeSignedIdToken();
 		const { cbs, auth } = callbacks();
-		const state: DeviceState = { pendingCount: 0, tokenResponses: [
-			{ status: 400, body: { error: "authorization_pending" } },
-			{ status: 200, body: { access_token: "acc", refresh_token: "ref", id_token: idToken(), expires_in: 3600 } },
-		] };
+		const state: DeviceState = {
+			pendingCount: 0,
+			jwk,
+			tokenResponses: [
+				{ status: 400, body: { error: "authorization_pending" } },
+				{ status: 200, body: { access_token: "acc", refresh_token: "ref", id_token: token, expires_in: 3600 } },
+			],
+		};
 		globalThis.fetch = deviceFetch(state, {
 			device_code: "dc", user_code: "ABCD-EFGH",
 			verification_uri: "https://accounts.x.ai/device",
@@ -81,6 +131,7 @@ describe("loginDeviceCode", () => {
 		const { cbs } = callbacks();
 		const state: DeviceState = { pendingCount: 0, tokenResponses: [
 			{ status: 400, body: { error: "slow_down" } },
+			// No id_token: device login still succeeds; signature path is skipped.
 			{ status: 200, body: { access_token: "acc", refresh_token: "ref", expires_in: 3600 } },
 		] };
 		globalThis.fetch = deviceFetch(state, {
