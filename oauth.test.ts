@@ -195,6 +195,15 @@ describe("validateIdToken", () => {
 		).not.toThrow();
 	});
 
+	it("skips the nonce check when no expected nonce was sent (device/refresh path)", () => {
+		// Device and refresh callers pass expectedNonce="" because they never
+		// established a nonce with the AS. A nonce claim that happens to land
+		// on those tokens must not force a spurious re-login.
+		expect(() =>
+			validateIdToken(jwt({ iss: "https://auth.x.ai", aud: CLIENT_ID, nonce: "anything" }), ""),
+		).not.toThrow();
+	});
+
 	it("throws on an expired exp (outside clock skew)", () => {
 		const expired = Math.floor(Date.now() / 1000) - 100;
 		expect(() =>

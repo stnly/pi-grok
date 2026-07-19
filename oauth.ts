@@ -470,8 +470,11 @@ function computeExpires(accessToken: string, expiresInSec: number): number {
  * - `iss` must be the xAI issuer (or a sub-path of it).
  * - `aud` must contain our client_id.
  * - `nonce`, if present, must match the one sent in the authorize request.
- *   (Checked conditionally so a provider that omits the claim does not fail;
- *   PKCE plus the one-time code still bind the exchange.)
+ *   Only enforced when `expectedNonce` is non-empty: device and refresh
+ *   callers pass `""` because they never established a nonce with the AS,
+ *   and a claim that happens to be present on those tokens is not bound to
+ *   anything we know. PKCE plus the one-time code (browser) or the
+ *   device_code grant still bind the exchange.
  * - `exp`, if present, must be in the future (30s clock skew allowed).
  *
  * Returns on success; throws `ID_TOKEN_INVALID` on any mismatch.
@@ -479,7 +482,7 @@ function computeExpires(accessToken: string, expiresInSec: number): number {
  * omit it).
  *
  * Claims only. Signature verification lives in `verifyIdTokenSignature`,
- * which callers invoke separately when a JWKS URI is available.
+ * which `discover()` always provisions a JWKS URI for.
  */
 export function validateIdToken(idToken: string, expectedNonce: string): void {
 	const claims = decodeIdToken(idToken);
@@ -514,9 +517,13 @@ export function validateIdToken(idToken: string, expectedNonce: string): void {
 		);
 	}
 
-	// If a nonce claim is present, it must match the one we sent. Not all
-	// providers return nonce; when absent, PKCE + one-time code still bind.
-	if (typeof claims.nonce === "string" && claims.nonce !== expectedNonce) {
+	// Only enforce nonce binding when we actually sent one (browser exchange).
+	// Device and refresh callers pass `expectedNonce=""` because they never
+	// established a nonce with the AS: a claim that happens to be present on
+	// those tokens isn't bound to anything we know, and checking it would
+	// either pass trivially or fail spuriously on every refresh if the AS
+	// starts echoing a nonce on rotated tokens.
+	if (expectedNonce !== "" && typeof claims.nonce === "string" && claims.nonce !== expectedNonce) {
 		throw new XaiOAuthError(
 			"xAI id_token nonce mismatch: possible token injection.",
 			XaiErrorCode.ID_TOKEN_INVALID,
