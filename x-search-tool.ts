@@ -20,6 +20,10 @@ import { readBoundedJson, readBoundedText, safeFetch } from "./safe-fetch.js";
 const SEARCH_MODEL = process.env.PI_XAI_X_SEARCH_MODEL ?? "grok-4.5";
 /** Reject any x_search response body larger than this before parsing. */
 const SEARCH_MAX_RESPONSE_BYTES = 256 * 1024;
+/** Deadline for the x_search model call (search X + synthesize). Measured
+ * latency is 30-60s for simple queries under normal load; complex queries or
+ * periods of heavy load on the proxy take longer, so this leaves headroom. */
+const SEARCH_TIMEOUT_MS = 120_000;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -88,9 +92,11 @@ export async function callXSearch(
 			...buildProxyHeaders(SEARCH_MODEL),
 		},
 		body: JSON.stringify(payload),
-		// Bound the call so a stalled proxy never wedges the tool. Combine the
-		// caller's cancel signal with a 30s deadline so either one fires.
-		signal: AbortSignal.any([AbortSignal.timeout(30_000), ...(signal ? [signal] : [])]),
+		// x_search is a model inference call (search X, synthesize an answer),
+		// not a quick API read. Measured latency is 30-60s for simple queries
+		// and longer for complex ones, so the timeout must accommodate that.
+		// Combine the caller's cancel signal with a 90s deadline so either fires.
+		signal: AbortSignal.any([AbortSignal.timeout(SEARCH_TIMEOUT_MS), ...(signal ? [signal] : [])]),
 	});
 
 	if (!response.ok) {
