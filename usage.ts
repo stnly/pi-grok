@@ -36,7 +36,7 @@
  * subset the response actually carried.
  */
 
-import { XaiErrorCode, XaiOAuthError } from "./errors.js";
+import { XaiOAuthError } from "./errors.js";
 import { CLI_PROXY_BASE_URL, buildProxyHeaders } from "./models.js";
 import { safeFetch, readBoundedJson } from "./safe-fetch.js";
 import { fetchUser } from "./account.js";

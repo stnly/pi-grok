@@ -24,7 +24,7 @@ export interface BoundedJsonOptions {
 	maxObjectKeys?: number;
 }
 
-export const DEFAULT_BOUNDED_JSON_OPTIONS: Required<BoundedJsonOptions> = {
+const DEFAULT_BOUNDED_JSON_OPTIONS: Required<BoundedJsonOptions> = {
 	maxDepth: 12,
 	maxNodes: 2048,
 	maxArrayItems: 64,

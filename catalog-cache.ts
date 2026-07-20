@@ -44,7 +44,7 @@ export const CATALOG_BOUNDED_JSON_OPTIONS: Required<BoundedJsonOptions> = {
 	maxObjectKeys: 64,
 };
 
-export type CatalogCacheSource = "fresh-cache" | "stale-cache";
+type CatalogCacheSource = "fresh-cache" | "stale-cache";
 
 export interface CatalogCacheRecord {
 	schemaVersion: number;

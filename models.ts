@@ -211,7 +211,7 @@ export function thinkingLevelMapFor(
 // ─── PI_XAI_OAUTH_MODELS env override ────────────────────────────────────────
 
 /** Parse `PI_XAI_OAUTH_MODELS` into a list of model ids (empty = no filter). */
-export function envModelIds(): string[] {
+function envModelIds(): string[] {
 	return (process.env.PI_XAI_OAUTH_MODELS || "").split(",").map((s) => s.trim()).filter(Boolean);
 }
 
@@ -340,14 +340,6 @@ export function mergeLiveModels(
 }
 
 // ─── Live catalog fetch ───────────────────────────────────────────────────────
-
-export async function fetchLiveModels(
-	accessToken: string,
-	baseUrl: string,
-): Promise<XaiModelConfig[] | null> {
-	const body = await fetchLiveCatalog(accessToken, baseUrl);
-	return body ? mergeLiveModels(FALLBACK_MODELS, body) : null;
-}
 
 /** Reject a live `/models` body larger than this before parsing. */
 const CATALOG_MAX_RESPONSE_BYTES = 256 * 1024;

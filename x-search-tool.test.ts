@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildProxyHeaders } from "./models.js";
 import { XSearchHttpError, callXSearch, formatXSearchError } from "./x-search-tool.js";
 

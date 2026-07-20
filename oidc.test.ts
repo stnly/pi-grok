@@ -5,7 +5,7 @@ import {
 	resetJwksCacheForTests,
 	verifyIdTokenSignature,
 } from "./oauth.js";
-import { XaiErrorCode, XaiOAuthError } from "./errors.js";
+import { XaiErrorCode } from "./errors.js";
 
 // ─── Test key material ──────────────────────────────────────────────────────
 

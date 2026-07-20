@@ -151,7 +151,7 @@ export async function setCodingDataRetention(token: string, optOut: boolean): Pr
 
 // ─── Privacy argument parsing ────────────────────────────────────────────────
 
-export type PrivacyArg =
+type PrivacyArg =
 	| { kind: "select" }
 	| { kind: "set"; optOut: boolean }
 	| { kind: "invalid"; arg: string };
