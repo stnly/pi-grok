@@ -49,7 +49,7 @@ pi remove git:github.com/stnly/pi-grok
 /login
 ```
 
-Choose **Use a subscription**, select **xAI (SuperGrok Subscription)**. Approve in your browser.
+Choose **Use a subscription**, select **xAI (SuperGrok Subscription)**. A verification link and code appear. Open the link, enter the code (or click the prefilled link), and approve on xAI's page. No browser redirect, no local port.
 
 **2. Pick a model**
 
@@ -91,11 +91,13 @@ export PI_XAI_OAUTH_MODELS="grok-build,grok-4.5"
 
 ## How it works
 
-pi starts a local HTTP server on `127.0.0.1:56121` and generates a PKCE challenge. Your browser opens to xAI's authorization page. You approve access. xAI redirects back with an auth code, which pi exchanges for access and refresh tokens.
+pi requests a device code from xAI and shows you a verification link plus a short code. You open the link in any browser (yours, your phone's, anything), enter the code, and approve. pi polls xAI's token endpoint in the background until you approve, deny, or the code expires. No local server, no port, no browser redirect. This works from SSH, containers, and headless boxes.
 
 Tokens refresh 5 minutes before they expire. You stay logged in until you revoke access. Credentials are stored locally and never leave your machine.
 
 Requests go through xAI's Responses API. Tool calling, streaming, and reasoning all work.
+
+Prefer the browser auto-redirect flow? Set `PI_XAI_LOGIN_METHOD=callback`. pi starts a local HTTP server on `127.0.0.1:56121`, opens your browser to xAI's authorization page, and catches the redirect callback. See [Remote / SSH](#remote--ssh) for the port-forwarding that path needs.
 
 ## Check status
 
@@ -165,7 +167,9 @@ If your organization enforces Zero Data Retention, the choice is locked and
 
 ## Remote / SSH
 
-Forward port 56121:
+The default device-code flow needs no port forwarding. Run `/login` on the remote, open the verification link in your local browser, and enter the code.
+
+If you prefer the browser callback flow (`PI_XAI_LOGIN_METHOD=callback`), forward port 56121:
 
 ```bash
 ssh -N -L 56121:127.0.0.1:56121 user@remote-host
@@ -205,7 +209,7 @@ pi-grok/
 ├── privacy.ts         # inline themed privacy picker (ctx.ui.custom, green-tick row)
 ├── sanitize.ts        # strips unsupported fields before each request
 ├── bounded-json.ts    # depth/node-bounded JSON parser for untrusted responses
-├── safe-fetch.ts      # fetch wrapper that rejects HTTP redirects
+├── safe-fetch.ts      # fetch wrapper: rejects HTTP redirects, bounds response bodies
 ├── errors.ts          # typed error classes
 ├── package.json
 └── tsconfig.json
@@ -218,6 +222,7 @@ pi-grok/
 - **Subscription usage** - `/xai-usage` resolves the user id from `/user`, then reads `/billing?format=credits`. The response is size-bounded and parsed through a bounded-JSON walker; only the derived numeric fields render.
 - **OIDC signature verification** - `discover()` requires a JWKS URI pinned to the xAI origin and the signing alg ES256. Login and refresh verify id_token signatures against that JWKS via WebCrypto; a kid miss forces one uncached re-fetch so key rotation mid-TTL still works.
 - **Redirect rejection** - every authenticated xAI request goes through a fetch wrapper that sets `redirect: "manual"` and throws on any 3xx, so credentials can't be replayed off the original request URL.
+- **Response body bounding** - every authenticated response is read through a streaming byte cap (`readBoundedText` / `readBoundedJson`) and then a depth/node/array-bounded JSON walker, so a hostile or misbehaving pinned origin can't hang the request or exhaust memory with a pathological body.
 - **Conversation scopes** - the default OAuth scope set includes `conversations:read` and `conversations:write` so the proxy can attach server-side history to `x-grok-conv-id` multi-turn sessions.
 - **Typed errors** - `XaiOAuthError` with machine-readable codes for distinguishing retryable vs fatal failures.
 - **Web Crypto** - `crypto.subtle` for PKCE and ES256 signature verification.
