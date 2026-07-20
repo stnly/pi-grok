@@ -179,6 +179,19 @@ describe("readBoundedText", () => {
 		// "four" alone is 4 bytes; total after "more" is 8. Cap at 6 trips it.
 		await expect(readBoundedText(res, 6)).rejects.toBeInstanceOf(ResponseSizeError);
 	});
+
+	it("counts bytes, not characters, on the no-stream fallback path (multibyte)", async () => {
+		// A Response without a streaming body (partial mock) falls through to
+		// response.text(). The cap must count UTF-8 bytes, not JS character
+		// count, so multibyte input is held to the same ceiling as the stream.
+		// Each '\u00e9' is 2 UTF-8 bytes but 1 JS char: 10 chars = 20 bytes.
+		const text = "\u00e9".repeat(10);
+		const res = { text: async () => text } as unknown as Response;
+		// 15-byte cap: passes by char count (10), fails by byte count (20).
+		await expect(readBoundedText(res, 15)).rejects.toBeInstanceOf(ResponseSizeError);
+		// 20-byte cap: exactly fits.
+		await expect(readBoundedText({ text: async () => text } as unknown as Response, 20)).resolves.toBe(text);
+	});
 });
 
 // ─── readBoundedJson ─────────────────────────────────────────────────────────

@@ -60,8 +60,12 @@ export async function safeFetch(input: string | URL | Request, init?: RequestIni
 export async function readBoundedText(response: Response, maxBytes: number): Promise<string> {
 	const stream = response.body;
 	if (!stream) {
+		// In-memory Response (vitest mocks, Response constructed from a
+		// string). No streaming body to cap mid-flight; apply the cap post-hoc.
+		// Use byte length, not character count, so multibyte UTF-8 is held to
+		// the same ceiling as the streaming path (which counts value.byteLength).
 		const text = await response.text();
-		if (text.length > maxBytes) throw new ResponseSizeError(maxBytes);
+		if (Buffer.byteLength(text, "utf8") > maxBytes) throw new ResponseSizeError(maxBytes);
 		return text;
 	}
 
