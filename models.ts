@@ -4,13 +4,12 @@
  * Hardcoded fallback list + live catalog fetching from the xAI API.
  */
 
-import { safeFetch } from "./safe-fetch.js";
+import { readBoundedJson, safeFetch } from "./safe-fetch.js";
 import {
 	CATALOG_BOUNDED_JSON_OPTIONS,
 	loadCachedCatalog,
 	writeCachedCatalog,
 } from "./catalog-cache.js";
-import { parseBoundedJson } from "./bounded-json.js";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
@@ -367,9 +366,10 @@ async function fetchLiveCatalog(
 			signal: AbortSignal.timeout(10_000),
 		});
 		if (!response.ok) return null;
-		const text = await response.text();
-		if (text.length > CATALOG_MAX_RESPONSE_BYTES) return null;
-		const parsed = parseBoundedJson(text, CATALOG_BOUNDED_JSON_OPTIONS);
+		// readBoundedJson streams the body through the byte cap and the bounded
+		// walker in one pass, so a pathological response can't exhaust memory
+		// before the post-hoc length check fires.
+		const parsed = await readBoundedJson(response, CATALOG_MAX_RESPONSE_BYTES, CATALOG_BOUNDED_JSON_OPTIONS);
 		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
 		return parsed as { data?: ApiModelEntry[] };
 	} catch {

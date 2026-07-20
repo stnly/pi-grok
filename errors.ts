@@ -5,7 +5,7 @@
  * retryable failures (network) from fatal ones (revoked refresh token).
  */
 
-/** Well-known error codes. The Const is the runtime value; the type alias
+/** Well-known error codes. The const is the runtime value; the type alias
  * below is the literal union, so `XaiOAuthError.code` narrows to one of
  * these strings instead of `string`. Add new codes here and the type widens
  * automatically. */
