@@ -157,7 +157,9 @@ If your organization enforces Zero Data Retention, the choice is locked and
 | `PI_XAI_BASE_URL` or `XAI_BASE_URL` | `https://api.x.ai/v1` |
 | `PI_XAI_OAUTH_MODELS` | all models |
 | `PI_XAI_OAUTH_CALLBACK_PORT` | `56121` |
+| `PI_XAI_OAUTH_CALLBACK_HOST` | `127.0.0.1` (bind address for the loopback callback server) |
 | `PI_XAI_OAUTH_CLIENT_ID` | built-in |
+| `PI_XAI_OAUTH_SCOPE` | `openid profile email offline_access grok-cli:access api:access conversations:read conversations:write` |
 | `PI_XAI_LOGIN_METHOD` | `device` (OAuth device flow, works everywhere). Set `callback` (or `browser`) to use the browser + loopback-callback flow instead, which auto-redirects but needs a reachable `127.0.0.1` port and a local browser. |
 | `PI_XAI_CLIENT_VERSION` | `0.2.101` (client version label sent to the proxy) |
 | `PI_XAI_CLIENT_NAME` | `grok-shell` (session product label sent to the proxy) |
