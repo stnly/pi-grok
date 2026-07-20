@@ -480,12 +480,11 @@ function computeExpires(accessToken: string, expiresInSec: number): number {
  *
  * - `iss` must be the xAI issuer (or a sub-path of it).
  * - `aud` must contain our client_id.
- * - `nonce`, if present, must match the one sent in the authorize request.
- *   Only enforced when `expectedNonce` is non-empty: device and refresh
- *   callers pass `""` because they never established a nonce with the AS,
- *   and a claim that happens to be present on those tokens is not bound to
- *   anything we know. PKCE plus the one-time code (browser) or the
- *   device_code grant still bind the exchange.
+ * - `nonce`: when `expectedNonce` is non-empty (browser exchange), the
+ *   id_token MUST carry a matching nonce claim. Absent or mismatched nonce
+ *   is rejected. Device and refresh callers pass `""` and skip this check
+ *   entirely: they never established a nonce with the AS, and PKCE plus the
+ *   one-time code (browser) or the device_code grant still bind the exchange.
  * - `exp`, if present, must be in the future (30s clock skew allowed).
  *
  * Returns on success; throws `ID_TOKEN_INVALID` on any mismatch.
@@ -528,17 +527,27 @@ export function validateIdToken(idToken: string, expectedNonce: string): void {
 		);
 	}
 
-	// Only enforce nonce binding when we actually sent one (browser exchange).
-	// Device and refresh callers pass `expectedNonce=""` because they never
-	// established a nonce with the AS: a claim that happens to be present on
-	// those tokens isn't bound to anything we know, and checking it would
-	// either pass trivially or fail spuriously on every refresh if the AS
-	// starts echoing a nonce on rotated tokens.
-	if (expectedNonce !== "" && typeof claims.nonce === "string" && claims.nonce !== expectedNonce) {
-		throw new XaiOAuthError(
-			"xAI id_token nonce mismatch: possible token injection.",
-			XaiErrorCode.ID_TOKEN_INVALID,
-		);
+	// When the caller sent a nonce (browser exchange), the AS MUST echo it
+	// back. An absent nonce claim on that path is a spec violation and a
+	// defense-in-depth signal: PKCE plus the one-time code already bind the
+	// exchange, but accepting a nonce-less id_token when we asked for one
+	// weakens replay detection. Device and refresh callers pass
+	// expectedNonce="" because they never established a nonce, so a claim
+	// that happens to be present on those tokens is not bound to anything we
+	// know and is left unchecked.
+	if (expectedNonce !== "") {
+		if (typeof claims.nonce !== "string") {
+			throw new XaiOAuthError(
+				"xAI id_token omitted the nonce claim; expected one matching the authorize request.",
+				XaiErrorCode.ID_TOKEN_INVALID,
+			);
+		}
+		if (claims.nonce !== expectedNonce) {
+			throw new XaiOAuthError(
+				"xAI id_token nonce mismatch: possible token injection.",
+				XaiErrorCode.ID_TOKEN_INVALID,
+			);
+		}
 	}
 
 	// If exp is present, it must be in the future, within clock-skew tolerance.
@@ -1071,9 +1080,9 @@ export async function loginDeviceCode(
 }
 
 /** Shape a device-flow token response into stored credentials. Mirrors the
- * exchange path: validates the id_token when present (device flow carries no
- * nonce, and validateIdToken only checks nonce when the claim is present),
- * then verifies the id_token signature against the pinned JWKS. */
+ * exchange path: validates the id_token when present (device flow passes
+ * expectedNonce="", so the nonce check is skipped), then verifies the
+ * id_token signature against the pinned JWKS. */
 async function shapeDeviceToken(
 	payload: Record<string, unknown>,
 	tokenEndpoint: string,

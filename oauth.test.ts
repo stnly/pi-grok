@@ -164,19 +164,19 @@ describe("validateIdToken", () => {
 
 	it("accepts an array audience containing our client_id", () => {
 		expect(() =>
-			validateIdToken(jwt({ iss: "https://auth.x.ai", aud: ["other", CLIENT_ID] }), "N1"),
+			validateIdToken(jwt({ iss: "https://auth.x.ai", aud: ["other", CLIENT_ID], nonce: "N1" }), "N1"),
 		).not.toThrow();
 	});
 
 	it("throws on a non-xAI issuer", () => {
 		expect(() =>
-			validateIdToken(jwt({ iss: "https://evil.com", aud: CLIENT_ID }), "N1"),
+			validateIdToken(jwt({ iss: "https://evil.com", aud: CLIENT_ID, nonce: "N1" }), "N1"),
 		).toThrow(XaiOAuthError);
 	});
 
 	it("throws on audience mismatch", () => {
 		try {
-			validateIdToken(jwt({ iss: "https://auth.x.ai", aud: "someone-else" }), "N1");
+			validateIdToken(jwt({ iss: "https://auth.x.ai", aud: "someone-else", nonce: "N1" }), "N1");
 			throw new Error("should have thrown");
 		} catch (e) {
 			expect((e as XaiOAuthError).code).toBe(XaiErrorCode.ID_TOKEN_INVALID);
@@ -189,10 +189,16 @@ describe("validateIdToken", () => {
 		).toThrow(XaiOAuthError);
 	});
 
-	it("skips the nonce check when the claim is absent", () => {
-		expect(() =>
-			validateIdToken(jwt({ iss: "https://auth.x.ai", aud: CLIENT_ID }), "N1"),
-		).not.toThrow();
+	it("rejects an absent nonce when one was expected (browser path)", () => {
+		// When the caller sent a nonce, the AS must echo it. An absent claim
+		// is a spec violation and weakens replay detection even though PKCE
+		// still binds the exchange.
+		try {
+			validateIdToken(jwt({ iss: "https://auth.x.ai", aud: CLIENT_ID }), "N1");
+			throw new Error("should have thrown");
+		} catch (e) {
+			expect((e as XaiOAuthError).code).toBe(XaiErrorCode.ID_TOKEN_INVALID);
+		}
 	});
 
 	it("skips the nonce check when no expected nonce was sent (device/refresh path)", () => {
@@ -207,14 +213,14 @@ describe("validateIdToken", () => {
 	it("throws on an expired exp (outside clock skew)", () => {
 		const expired = Math.floor(Date.now() / 1000) - 100;
 		expect(() =>
-			validateIdToken(jwt({ iss: "https://auth.x.ai", aud: CLIENT_ID, exp: expired }), "N1"),
+			validateIdToken(jwt({ iss: "https://auth.x.ai", aud: CLIENT_ID, exp: expired, nonce: "N1" }), "N1"),
 		).toThrow(XaiOAuthError);
 	});
 
 	it("accepts an exp within clock skew", () => {
 		const almost = Math.floor(Date.now() / 1000) - 5;
 		expect(() =>
-			validateIdToken(jwt({ iss: "https://auth.x.ai", aud: CLIENT_ID, exp: almost }), "N1"),
+			validateIdToken(jwt({ iss: "https://auth.x.ai", aud: CLIENT_ID, exp: almost, nonce: "N1" }), "N1"),
 		).not.toThrow();
 	});
 });
