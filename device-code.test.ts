@@ -242,4 +242,48 @@ describe("loginDeviceCode", () => {
 		// fatal DEVICE_CODE_FAILED), so the user just sees a cancelled login.
 		await expect(promise).rejects.toThrow(/cancelled/i);
 	});
+
+	it("swallows an onManualCodeInput rejection on the onAuth fallback path (no crash)", async () => {
+		// Regression: the onAuth fallback path must consume onManualCodeInput
+		// so a paste-prompt cancel does not surface as an unhandled rejection.
+		// The host shows a paste prompt because usesCallbackServer is true; an
+		// Escape rejects the promise. If loginDeviceCode does not consume it,
+		// the rejection crashes pi. The login itself should settle via signal.
+		const ac = new AbortController();
+		let manualReject: ((err: Error) => void) | undefined;
+		let onManualCodeCalled = false;
+		const cbs = {
+			onAuth: () => {},
+			onPrompt: async () => "",
+			onManualCodeInput: () => new Promise<string>((_resolve, reject) => {
+				onManualCodeCalled = true;
+				manualReject = reject;
+			}),
+			signal: ac.signal,
+		} as unknown as import("@earendil-works/pi-ai").OAuthLoginCallbacks;
+		const state: DeviceState = { pendingCount: 0, tokenResponses: [
+			{ status: 400, body: { error: "authorization_pending" } },
+		] };
+		globalThis.fetch = deviceFetch(state, {
+			device_code: "dc", user_code: "X",
+			verification_uri: "https://accounts.x.ai/device", expires_in: 300, interval: 1,
+		});
+
+		const promise = loginDeviceCode(cbs);
+		// Wait for the onAuth fallback to fire and consume onManualCodeInput.
+		const deadline = Date.now() + 2000;
+		while (!onManualCodeCalled && Date.now() < deadline) {
+			await new Promise((r) => setTimeout(r, 10));
+		}
+		expect(onManualCodeCalled).toBe(true);
+
+		// Reject the paste prompt (user hit Escape). This must NOT crash.
+		manualReject?.(new Error("Login cancelled"));
+		// Give the microtask a tick to surface any unhandled rejection.
+		await new Promise((r) => setTimeout(r, 20));
+
+		// The login is still running (polling). Abort via signal to settle it.
+		ac.abort();
+		await expect(promise).rejects.toThrow(/cancelled/i);
+	});
 });
