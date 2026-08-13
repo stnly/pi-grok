@@ -7,6 +7,7 @@
 import { readBoundedJson, RedirectError, safeFetch } from "./safe-fetch.js";
 import {
 	CATALOG_BOUNDED_JSON_OPTIONS,
+	CATALOG_FRESH_TTL_MS,
 	loadCachedCatalog,
 	writeCachedCatalog,
 } from "./catalog-cache.js";
@@ -266,9 +267,30 @@ export function resolveModels(): XaiModelConfig[] {
 
 interface ApiModelEntry {
 	id: string;
+	name?: string;
 	owned_by?: string;
+	/** cli-chat-proxy field. OpenAI-shaped catalogs send `context_length`. */
+	context_window?: number;
 	context_length?: number;
 	max_output_tokens?: number;
+	supports_reasoning_effort?: boolean;
+}
+
+/** Live catalog window: proxy uses context_window; OpenAI uses context_length. */
+function liveContextWindow(entry: ApiModelEntry): number | undefined {
+	return entry.context_window ?? entry.context_length;
+}
+
+/** Effort map from a live entry. The proxy flag wins over the prefix list so a
+ * newly released id does not wait for a code change to expose the picker. */
+function liveThinkingMap(
+	entry: ApiModelEntry,
+	reasoning: boolean,
+): Record<string, string | null> | undefined {
+	if (entry.supports_reasoning_effort) {
+		return { off: null, minimal: null, xhigh: "xhigh" };
+	}
+	return thinkingLevelMapFor(entry.id, reasoning);
 }
 
 /** Cost overrides for known model families (the live API doesn't expose pricing). */
@@ -303,12 +325,13 @@ function isChatModelEntry(id: string): boolean {
  * Pure and side-effect free so it can be unit-tested without network.
  * Returns `base` unchanged when `body` is null or has no `data` array.
  *
- * This is enrichment only: the live catalog is authoritative for
- * `context_length` and `max_output_tokens`, the merged list follows the live
- * response order, and newly discovered ids get sensible defaults. It does not
- * set routing. `rebuildModelsForOAuth` is the single routing authority and
- * sends every OAuth model through the CLI proxy, so merge stays decoupled
- * from how requests reach xAI.
+ * This is enrichment only: the live catalog is authoritative for the
+ * context window (`context_window` on the proxy, `context_length` on an
+ * OpenAI-shaped body) and `max_output_tokens` when present. The merged
+ * list follows the live response order, and newly discovered ids get
+ * sensible defaults. It does not set routing. `rebuildModelsForOAuth` is
+ * the single routing authority and sends every OAuth model through the
+ * CLI proxy, so merge stays decoupled from how requests reach xAI.
  */
 export function mergeLiveModels(
 	base: XaiModelConfig[],
@@ -326,21 +349,32 @@ export function mergeLiveModels(
 		seen.add(entry.id);
 		const existing = baseById.get(entry.id);
 		if (existing) {
-			// Live fields override; base fills name/cost/reasoning.
+			// Live fields override; base fills cost/reasoning when the proxy
+			// does not send them. Name and effort map come from the live
+			// entry when present so a renamed or newly effort-capable id
+			// does not wait for a fallback edit.
+			const reasoning = existing.reasoning;
+			const thinkingLevelMap = liveThinkingMap(entry, reasoning)
+				?? existing.thinkingLevelMap;
 			merged.push({
 				...existing,
-				contextWindow: entry.context_length ?? existing.contextWindow,
+				name: entry.name ?? existing.name,
+				contextWindow: liveContextWindow(entry) ?? existing.contextWindow,
 				maxTokens: entry.max_output_tokens ?? existing.maxTokens,
+				...(thinkingLevelMap ? { thinkingLevelMap } : {}),
 			});
 		} else {
+			const reasoning = true;
+			const thinkingLevelMap = liveThinkingMap(entry, reasoning);
 			merged.push({
 				id: entry.id,
-				name: entry.id,
-				reasoning: true,
+				name: entry.name ?? entry.id,
+				reasoning,
 				input: ["text", "image"],
 				cost: COST_OVERRIDES[entry.id] ?? COST_420,
-				contextWindow: entry.context_length ?? 1_000_000,
+				contextWindow: liveContextWindow(entry) ?? 1_000_000,
 				maxTokens: entry.max_output_tokens ?? 30_000,
+				...(thinkingLevelMap ? { thinkingLevelMap } : {}),
 			});
 		}
 	}
@@ -433,6 +467,15 @@ let discoveryRetryDelaysMs = DISCOVERY_RETRY_DELAYS_MS;
 let discoveryRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let discoveryRetryWaitResolve: (() => void) | null = null;
 
+/** Called after a successful live fetch commits a body. The host uses this
+ * to re-register the provider so the picker updates without a second open. */
+type CatalogUpdatedHandler = (body: { data?: ApiModelEntry[] }) => void;
+let catalogUpdatedHandler: CatalogUpdatedHandler | null = null;
+
+export function onCatalogUpdated(handler: CatalogUpdatedHandler | null): void {
+	catalogUpdatedHandler = handler;
+}
+
 /**
  * Merge the discovered catalog into a base list. Returns `base` unchanged
  * when no successful fetch has completed, so callers always get a usable list.
@@ -483,6 +526,19 @@ export function triggerDiscovery(accessToken: string, baseUrl: string): void {
 	// check, run from a chained finally so the worker never self-references).
 	if (discoveryInFlight && discoveryLastToken === accessToken) return;
 
+	// Same token, a successful body younger than the fresh TTL, no error:
+	// skip the network. The picker and /xai-status both call this, and a
+	// 15-minute-old catalog does not need another /models hit.
+	if (
+		discoveryLastToken === accessToken
+		&& discoveredBody
+		&& discoveryFetchedAt > 0
+		&& Date.now() - discoveryFetchedAt < CATALOG_FRESH_TTL_MS
+		&& discoveryLastError === null
+	) {
+		return;
+	}
+
 	// Stamp the new token first so a worker woken from a retry delay sees it
 	// and exits instead of firing another request for the old token.
 	discoveryLastToken = accessToken;
@@ -511,6 +567,10 @@ export function triggerDiscovery(accessToken: string, baseUrl: string): void {
 				discoveryLastError = null;
 				discoveryFetchedAt = Date.now();
 				void writeCachedCatalog(catalogCachePath, result.body, discoveryFetchedAt);
+				if (catalogUpdatedHandler) {
+					try { catalogUpdatedHandler(result.body); }
+					catch { /* host callback must not break the worker */ }
+				}
 				return;
 			}
 			const error = result.ok
@@ -627,6 +687,7 @@ export function resetDiscoveryForTests(): void {
 	discoveryFetchedAt = 0;
 	discoveryLoadedFromDisk = false;
 	discoveryRetryDelaysMs = DISCOVERY_RETRY_DELAYS_MS;
+	catalogUpdatedHandler = null;
 }
 
 /** Override the retry backoff for tests. Pass an empty array to disable

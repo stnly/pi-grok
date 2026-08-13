@@ -23,9 +23,11 @@ import { type XaiOAuthCredentials, getBaseUrl } from "./oauth.js";
 import {
 	resolveModels,
 	rebuildModelsForOAuth,
+	applyDiscoveredModels,
 	thinkingLevelMapFor,
 	triggerDiscovery,
 	discoveryStatus,
+	onCatalogUpdated,
 	CLI_PROXY_BASE_URL,
 	buildProxyHeaders,
 	type XaiModelConfig,
@@ -151,6 +153,35 @@ export default function (pi: ExtensionAPI) {
 		oauth: oauthConfig,
 
 		streamSimple: streamGrok,
+	});
+
+	// When a live /models fetch lands, re-register this provider so the
+	// picker picks up new ids and live context windows without a second
+	// open. registerProvider after load takes effect immediately and
+	// re-runs modifyModels, which calls triggerDiscovery again; that
+	// call is a no-op (in-flight or still inside the fresh TTL).
+	onCatalogUpdated(() => {
+		const next = applyDiscoveredModels(resolveModels());
+		pi.registerProvider("xai-oauth", {
+			name: "xAI (SuperGrok Subscription)",
+			baseUrl,
+			apiKey: "$XAI_OAUTH_TOKEN",
+			api: "openai-responses",
+			models: next.map((m: XaiModelConfig) => ({
+				id: m.id,
+				name: m.name,
+				reasoning: m.reasoning,
+				thinkingLevelMap: m.thinkingLevelMap ?? thinkingLevelMapFor(m.id, m.reasoning),
+				input: m.input,
+				cost: m.cost,
+				contextWindow: m.contextWindow,
+				maxTokens: m.maxTokens,
+				baseUrl: CLI_PROXY_BASE_URL,
+				headers: buildProxyHeaders(m.id),
+			})),
+			oauth: oauthConfig,
+			streamSimple: streamGrok,
+		});
 	});
 
 	// ── Payload sanitization via event ────────────────────────────────────

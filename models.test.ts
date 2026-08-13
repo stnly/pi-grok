@@ -17,6 +17,7 @@ import {
 	supportsReasoningEffort,
 	thinkingLevelMapFor,
 	triggerDiscovery,
+	onCatalogUpdated,
 	_setCatalogCachePathForTests,
 	_setDiscoveryRetryDelaysForTests,
 } from "./models.js";
@@ -201,6 +202,31 @@ describe("mergeLiveModels", () => {
 
 	it("returns the base list when the live response has no data array", () => {
 		expect(mergeLiveModels(base, { data: undefined } as any)).toEqual(base);
+	});
+
+	it("reads the cli-chat-proxy field names (context_window, name, effort)", () => {
+		// The proxy sends context_window and name. It does not send
+		// context_length or max_output_tokens. A merge that only reads the
+		// OpenAI names drops the live window and the display name.
+		const merged = mergeLiveModels(base, {
+			data: [{
+				id: "grok-9",
+				name: "Grok Nine",
+				context_window: 777_000,
+				supports_reasoning_effort: true,
+			}],
+		});
+		const m = merged.find((x) => x.id === "grok-9");
+		expect(m).toBeDefined();
+		expect(m?.name).toBe("Grok Nine");
+		expect(m?.contextWindow).toBe(777_000);
+		expect(m?.reasoning).toBe(true);
+		expect(m?.thinkingLevelMap).toEqual({ off: null, minimal: null, xhigh: "xhigh" });
+
+		const known = mergeLiveModels(base, {
+			data: [{ id: "grok-4.5", context_window: 424_000, name: "Grok 4.5" }],
+		}).find((x) => x.id === "grok-4.5");
+		expect(known?.contextWindow).toBe(424_000);
 	});
 
 	it("appends a newly discovered model id with sensible defaults", () => {
@@ -604,6 +630,32 @@ describe("discovery cache", () => {
 		// Non-provider model passes through untouched.
 		const other = result.find((m) => (m as any).provider === "other") as any;
 		expect(other.baseUrl).toBe("https://example.com");
+	});
+
+	it("skips a second fetch while the in-memory catalog is still fresh", async () => {
+		triggerDiscovery("token", CLI_PROXY_URL);
+		const deadline = Date.now() + 2000;
+		while (discoveryStatus().state !== "warm" && Date.now() < deadline) {
+			await new Promise((r) => setTimeout(r, 10));
+		}
+		expect(discoveryStatus().state).toBe("warm");
+		const fetchMock = globalThis.fetch as unknown as { mock: { calls: unknown[] } };
+		const before = fetchMock.mock.calls.length;
+		triggerDiscovery("token", CLI_PROXY_URL);
+		await new Promise((r) => setTimeout(r, 30));
+		expect(fetchMock.mock.calls.length).toBe(before);
+	});
+
+	it("notifies onCatalogUpdated after a successful fetch", async () => {
+		let hits = 0;
+		onCatalogUpdated(() => { hits++; });
+		triggerDiscovery("token", CLI_PROXY_URL);
+		const deadline = Date.now() + 2000;
+		while (hits === 0 && Date.now() < deadline) {
+			await new Promise((r) => setTimeout(r, 10));
+		}
+		expect(hits).toBe(1);
+		expect(discoveryStatus().state).toBe("warm");
 	});
 
 	it("routes the OAuth catalog fetch through the cli-chat-proxy, not api.x.ai", async () => {
