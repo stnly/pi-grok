@@ -30,6 +30,18 @@ describe("FALLBACK_MODELS", () => {
 		expect(m?.contextWindow).toBe(500_000);
 	});
 
+	it("includes grok-4.6", () => {
+		const m = FALLBACK_MODELS.find((x) => x.id === "grok-4.6");
+		expect(m).toBeDefined();
+		expect(m?.name).toBe("Grok 4.6");
+		expect(m?.reasoning).toBe(true);
+		expect(m?.input).toEqual(["text", "image"]);
+		// cli-chat-proxy /models reports context_window 500000; grok-4.6 is
+		// priced the same as grok-4.5.
+		expect(m?.contextWindow).toBe(500_000);
+		expect(m?.cost).toEqual(COST_45);
+	});
+
 	it("grok-build matches the official context window (500k)", () => {
 		const m = FALLBACK_MODELS.find((x) => x.id === "grok-build");
 		expect(m).toBeDefined();
@@ -110,6 +122,10 @@ describe("supportsReasoningEffort", () => {
 		expect(supportsReasoningEffort("grok-4.5")).toBe(true);
 	});
 
+	it("returns true for grok-4.6", () => {
+		expect(supportsReasoningEffort("grok-4.6")).toBe(true);
+	});
+
 	it("returns true for grok-4.5 with provider prefix", () => {
 		expect(supportsReasoningEffort("xai-oauth/grok-4.5")).toBe(true);
 	});
@@ -122,6 +138,10 @@ describe("supportsReasoningEffort", () => {
 describe("thinkingLevelMapFor", () => {
 	it("exposes low/medium/high/xhigh for an effort-capable reasoning model", () => {
 		expect(thinkingLevelMapFor("grok-4.5", true)).toEqual({ off: null, minimal: null, xhigh: "xhigh" });
+	});
+
+	it("exposes low/medium/high/xhigh for grok-4.6", () => {
+		expect(thinkingLevelMapFor("grok-4.6", true)).toEqual({ off: null, minimal: null, xhigh: "xhigh" });
 	});
 
 	it("honors a provider-qualified id", () => {

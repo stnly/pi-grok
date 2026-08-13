@@ -61,6 +61,7 @@ Choose **Use a subscription**, select **xAI (SuperGrok Subscription)**. A verifi
 
 ## Models
 
+- **grok-4.6**
 - **grok-4.5**
 - **grok-4.3**
 - **grok-composer-2.5-fast**
