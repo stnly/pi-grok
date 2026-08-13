@@ -190,8 +190,13 @@ export default function (pi: ExtensionAPI) {
 
 			// Fetch account enrichment best-effort: a failed lookup (offline,
 			// expired) still renders the model count so status stays useful.
+			// Kick discovery too: /xai-status is the command you run when the
+			// catalog looks stale, and after the retry budget is spent this is
+			// the way to start a fresh sequence. A fetch already in flight for
+			// this token is a no-op.
 			let user = null;
 			if (token) {
+				triggerDiscovery(token, CLI_PROXY_BASE_URL);
 				try {
 					user = await fetchUser(token);
 				} catch (err) {

@@ -4,7 +4,7 @@
  * Hardcoded fallback list + live catalog fetching from the xAI API.
  */
 
-import { readBoundedJson, safeFetch } from "./safe-fetch.js";
+import { readBoundedJson, RedirectError, safeFetch } from "./safe-fetch.js";
 import {
 	CATALOG_BOUNDED_JSON_OPTIONS,
 	loadCachedCatalog,
@@ -358,11 +358,22 @@ export function mergeLiveModels(
 /** Reject a live `/models` body larger than this before parsing. */
 const CATALOG_MAX_RESPONSE_BYTES = 256 * 1024;
 
-/** Fetch and return the raw `/models` body, or null on any failure. */
+/** Outcome of one `/models` request. `retryable` is false for auth and
+ * client errors (401/403/4xx other than 408/429); true for 5xx, 408, 429,
+ * timeouts, and network failures. */
+type CatalogFetchResult =
+	| { ok: true; body: { data?: ApiModelEntry[] } }
+	| { ok: false; retryable: boolean; error: string };
+
+function isRetryableStatus(status: number): boolean {
+	return status === 408 || status === 429 || status >= 500;
+}
+
+/** Fetch the raw `/models` body. Never throws: every failure is a typed result. */
 async function fetchLiveCatalog(
 	accessToken: string,
 	baseUrl: string,
-): Promise<{ data?: ApiModelEntry[] } | null> {
+): Promise<CatalogFetchResult> {
 	try {
 		const response = await safeFetch(`${baseUrl}/models`, {
 			headers: {
@@ -371,15 +382,30 @@ async function fetchLiveCatalog(
 			},
 			signal: AbortSignal.timeout(10_000),
 		});
-		if (!response.ok) return null;
+		if (!response.ok) {
+			return {
+				ok: false,
+				retryable: isRetryableStatus(response.status),
+				error: `catalog fetch failed (${response.status})`,
+			};
+		}
 		// readBoundedJson streams the body through the byte cap and the bounded
 		// walker in one pass, so a pathological response can't exhaust memory
 		// before the post-hoc length check fires.
 		const parsed = await readBoundedJson(response, CATALOG_MAX_RESPONSE_BYTES, CATALOG_BOUNDED_JSON_OPTIONS);
-		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-		return parsed as { data?: ApiModelEntry[] };
-	} catch {
-		return null;
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+			return { ok: false, retryable: true, error: "catalog fetch failed (invalid body)" };
+		}
+		return { ok: true, body: parsed as { data?: ApiModelEntry[] } };
+	} catch (err) {
+		if (err instanceof RedirectError) {
+			return { ok: false, retryable: false, error: "catalog fetch failed (redirect)" };
+		}
+		const name = err instanceof Error ? err.name : "";
+		if (name === "TimeoutError" || name === "AbortError") {
+			return { ok: false, retryable: true, error: "catalog fetch failed (timeout)" };
+		}
+		return { ok: false, retryable: true, error: "catalog fetch failed (network)" };
 	}
 }
 
@@ -399,6 +425,13 @@ let discoveryLastToken: string | null = null;
 let discoveryLastError: string | null = null;
 let discoveryFetchedAt = 0; // epoch ms of the last successful fetch, 0 = never
 let discoveryLoadedFromDisk = false; // true after the first attempt to read the disk cache
+
+/** Backoff between retries after a transient failure. Three delays = four
+ * attempts total (initial + one per delay). Overridable in tests. */
+const DISCOVERY_RETRY_DELAYS_MS = [10_000, 30_000, 90_000];
+let discoveryRetryDelaysMs = DISCOVERY_RETRY_DELAYS_MS;
+let discoveryRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let discoveryRetryWaitResolve: (() => void) | null = null;
 
 /**
  * Merge the discovered catalog into a base list. Returns `base` unchanged
@@ -433,7 +466,10 @@ export function applyDiscoveredModels(
  * path). Model routing is static and set in rebuildModelsForOAuth.
  *
  * Deduplicates concurrent calls so repeated `/reload`s don't stack requests.
- * Errors are swallowed (a failed fetch leaves the cache as-is).
+ * A transient failure (5xx, 408, 429, timeout, network) retries with
+ * backoff (10s / 30s / 90s, four attempts total). Auth and other 4xx
+ * failures stop at the first attempt. A later trigger (picker, /reload,
+ * /login) after the budget is spent starts a fresh sequence.
  */
 export function triggerDiscovery(accessToken: string, baseUrl: string): void {
 	// Drop a second trigger only when one is in flight for the same token. A
@@ -447,6 +483,11 @@ export function triggerDiscovery(accessToken: string, baseUrl: string): void {
 	// check, run from a chained finally so the worker never self-references).
 	if (discoveryInFlight && discoveryLastToken === accessToken) return;
 
+	// Stamp the new token first so a worker woken from a retry delay sees it
+	// and exits instead of firing another request for the old token.
+	discoveryLastToken = accessToken;
+	cancelPendingRetryWait();
+
 	// On the first trigger, adopt the on-disk cache as the initial in-memory
 	// state before issuing the network request. The first cold pi start
 	// otherwise shows the hardcoded fallback list until the fetch resolves;
@@ -459,33 +500,64 @@ export function triggerDiscovery(accessToken: string, baseUrl: string): void {
 			discoveryLoadedFromDisk = true;
 			return loadCatalogFromDisk();
 		})();
-
-	discoveryLastToken = accessToken;
 	const myToken = accessToken;
 	const p: Promise<void> = (async () => {
 		await seed; // never overwrite an in-memory state the disk load hasn't seen
-		try {
-			const body = await fetchLiveCatalog(accessToken, baseUrl);
+		for (let attempt = 0; ; attempt++) {
+			const result = await fetchLiveCatalog(accessToken, baseUrl);
 			if (discoveryLastToken !== myToken) return; // superseded by a newer token
-			if (body && Array.isArray(body.data)) {
-				discoveredBody = body;
+			if (result.ok && Array.isArray(result.body.data) && result.body.data.length > 0) {
+				discoveredBody = result.body;
 				discoveryLastError = null;
 				discoveryFetchedAt = Date.now();
-				void writeCachedCatalog(catalogCachePath, body, discoveryFetchedAt);
-			} else if (body === null) {
-				// fetchLiveCatalog returns null on network/HTTP failure; record so
-				// /xai-status can explain why the catalog looks stale.
-				discoveryLastError = "catalog fetch failed";
+				void writeCachedCatalog(catalogCachePath, result.body, discoveryFetchedAt);
+				return;
 			}
-		} catch (err) {
+			const error = result.ok
+				? (Array.isArray(result.body.data)
+					? "catalog fetch failed (empty catalog)"
+					: "catalog fetch failed (invalid body)")
+				: result.error;
+			discoveryLastError = error;
+			const retryable = result.ok || result.retryable;
+			if (!retryable) return;
+			const delay = discoveryRetryDelaysMs[attempt];
+			if (delay === undefined) return;
+			const total = discoveryRetryDelaysMs.length + 1;
+			discoveryLastError = `${error}; retrying ${attempt + 2}/${total}`;
+			await waitForRetry(delay);
 			if (discoveryLastToken !== myToken) return;
-			discoveryLastError = err instanceof Error ? err.message : String(err);
 		}
 	})();
 	discoveryInFlight = p;
 	p.finally(() => {
 		if (discoveryInFlight === p) discoveryInFlight = null;
 	});
+}
+
+/** Resolve after `ms`, or sooner if a newer trigger cancels the wait. */
+function waitForRetry(ms: number): Promise<void> {
+	return new Promise((resolve) => {
+		discoveryRetryWaitResolve = resolve;
+		discoveryRetryTimer = setTimeout(() => {
+			discoveryRetryTimer = null;
+			discoveryRetryWaitResolve = null;
+			resolve();
+		}, ms);
+	});
+}
+
+/** Wake a worker parked on a retry delay so a newer token can take over. */
+function cancelPendingRetryWait(): void {
+	if (discoveryRetryTimer) {
+		clearTimeout(discoveryRetryTimer);
+		discoveryRetryTimer = null;
+	}
+	if (discoveryRetryWaitResolve) {
+		const resolve = discoveryRetryWaitResolve;
+		discoveryRetryWaitResolve = null;
+		resolve();
+	}
 }
 
 /** Read the on-disk cache and adopt it as the in-memory state when it is
@@ -545,12 +617,22 @@ export function discoveryStatus(): {
 
 /** Clear the discovery cache. For tests only. */
 export function resetDiscoveryForTests(): void {
+	// Null the token first so a worker woken from a retry delay exits instead
+	// of firing another request against a restored fetch mock.
+	discoveryLastToken = null;
+	cancelPendingRetryWait();
 	discoveredBody = null;
 	discoveryInFlight = null;
-	discoveryLastToken = null;
 	discoveryLastError = null;
 	discoveryFetchedAt = 0;
 	discoveryLoadedFromDisk = false;
+	discoveryRetryDelaysMs = DISCOVERY_RETRY_DELAYS_MS;
+}
+
+/** Override the retry backoff for tests. Pass an empty array to disable
+ * retries (one attempt only). Restored by resetDiscoveryForTests. */
+export function _setDiscoveryRetryDelaysForTests(delaysMs: number[]): void {
+	discoveryRetryDelaysMs = delaysMs;
 }
 
 /** Override the cache path (and reset the loaded-from-disk flag) for tests.

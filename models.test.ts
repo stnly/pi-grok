@@ -18,6 +18,7 @@ import {
 	thinkingLevelMapFor,
 	triggerDiscovery,
 	_setCatalogCachePathForTests,
+	_setDiscoveryRetryDelaysForTests,
 } from "./models.js";
 
 describe("FALLBACK_MODELS", () => {
@@ -621,6 +622,127 @@ describe("discovery cache", () => {
 			Authorization: "Bearer token",
 			"X-XAI-Token-Auth": "xai-grok-cli",
 		});
+	});
+
+	it("retries a transient failure and warms the cache on a later success", async () => {
+		_setDiscoveryRetryDelaysForTests([5, 5]);
+		let calls = 0;
+		globalThis.fetch = vi.fn(async (url: string | URL | Request) => {
+			if (!String(url).endsWith("/models")) return new Response("404", { status: 404 });
+			calls++;
+			if (calls < 3) return new Response("upstream", { status: 503 });
+			return new Response(JSON.stringify({
+				data: [{ id: "grok-after-retry", context_length: 500_000 }],
+			}), { status: 200, headers: { "Content-Type": "application/json" } });
+		}) as typeof fetch;
+
+		triggerDiscovery("token", CLI_PROXY_URL);
+		const deadline = Date.now() + 2000;
+		while (discoveryStatus().state !== "warm" && Date.now() < deadline) {
+			await new Promise((r) => setTimeout(r, 10));
+		}
+		expect(discoveryStatus().state).toBe("warm");
+		expect(discoveryStatus().lastError).toBeNull();
+		expect(mergeDiscoveredModels(FALLBACK_MODELS).some((m) => m.id === "grok-after-retry")).toBe(true);
+		expect(calls).toBe(3);
+	});
+
+	it("records the HTTP status and stops retrying on 401", async () => {
+		_setDiscoveryRetryDelaysForTests([5, 5]);
+		let calls = 0;
+		globalThis.fetch = vi.fn(async (url: string | URL | Request) => {
+			if (!String(url).endsWith("/models")) return new Response("404", { status: 404 });
+			calls++;
+			return new Response("expired", { status: 401 });
+		}) as typeof fetch;
+
+		triggerDiscovery("token", CLI_PROXY_URL);
+		const deadline = Date.now() + 1000;
+		while (discoveryStatus().state === "in-flight" && Date.now() < deadline) {
+			await new Promise((r) => setTimeout(r, 10));
+		}
+		expect(discoveryStatus().state).toBe("cold");
+		expect(discoveryStatus().lastError).toBe("catalog fetch failed (401)");
+		await new Promise((r) => setTimeout(r, 40));
+		expect(calls).toBe(1);
+	});
+
+	it("retries an empty catalog instead of adopting it as warm", async () => {
+		_setDiscoveryRetryDelaysForTests([5]);
+		let calls = 0;
+		globalThis.fetch = vi.fn(async (url: string | URL | Request) => {
+			if (!String(url).endsWith("/models")) return new Response("404", { status: 404 });
+			calls++;
+			if (calls === 1) {
+				return new Response(JSON.stringify({ data: [] }), {
+					status: 200, headers: { "Content-Type": "application/json" },
+				});
+			}
+			return new Response(JSON.stringify({
+				data: [{ id: "grok-after-empty", context_length: 500_000 }],
+			}), { status: 200, headers: { "Content-Type": "application/json" } });
+		}) as typeof fetch;
+
+		triggerDiscovery("token", CLI_PROXY_URL);
+		const deadline = Date.now() + 2000;
+		while (discoveryStatus().state !== "warm" && Date.now() < deadline) {
+			await new Promise((r) => setTimeout(r, 10));
+		}
+		expect(discoveryStatus().state).toBe("warm");
+		expect(mergeDiscoveredModels(FALLBACK_MODELS).some((m) => m.id === "grok-after-empty")).toBe(true);
+		expect(calls).toBe(2);
+	});
+
+	it("exhausts the retry budget and keeps the last error", async () => {
+		_setDiscoveryRetryDelaysForTests([5, 5]);
+		let calls = 0;
+		globalThis.fetch = vi.fn(async (url: string | URL | Request) => {
+			if (!String(url).endsWith("/models")) return new Response("404", { status: 404 });
+			calls++;
+			return new Response("upstream", { status: 503 });
+		}) as typeof fetch;
+
+		triggerDiscovery("token", CLI_PROXY_URL);
+		const deadline = Date.now() + 2000;
+		while (discoveryStatus().state === "in-flight" && Date.now() < deadline) {
+			await new Promise((r) => setTimeout(r, 10));
+		}
+		expect(discoveryStatus().state).toBe("cold");
+		expect(discoveryStatus().lastError).toBe("catalog fetch failed (503)");
+		expect(calls).toBe(3);
+	});
+
+	it("cancels a pending retry when a newer token supersedes", async () => {
+		_setDiscoveryRetryDelaysForTests([200]);
+		let calls = 0;
+		globalThis.fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+			if (!String(url).endsWith("/models")) return new Response("404", { status: 404 });
+			calls++;
+			const headers = init?.headers as Record<string, string> | undefined;
+			if (headers?.Authorization === "Bearer token-a") return new Response("upstream", { status: 503 });
+			return new Response(JSON.stringify({
+				data: [{ id: "grok-from-b", context_length: 500_000 }],
+			}), { status: 200, headers: { "Content-Type": "application/json" } });
+		}) as typeof fetch;
+
+		triggerDiscovery("token-a", CLI_PROXY_URL);
+		const mid = Date.now() + 500;
+		while (discoveryStatus().lastError === null && Date.now() < mid) {
+			await new Promise((r) => setTimeout(r, 10));
+		}
+		// token-a failed once and is waiting on the 200ms retry delay.
+		expect(discoveryStatus().lastError).toMatch(/503/);
+		triggerDiscovery("token-b", CLI_PROXY_URL);
+
+		const deadline = Date.now() + 2000;
+		while (discoveryStatus().state !== "warm" && Date.now() < deadline) {
+			await new Promise((r) => setTimeout(r, 10));
+		}
+		expect(discoveryStatus().state).toBe("warm");
+		expect(mergeDiscoveredModels(FALLBACK_MODELS).some((m) => m.id === "grok-from-b")).toBe(true);
+		// token-a's scheduled retry must not fire after B superseded it.
+		await new Promise((r) => setTimeout(r, 250));
+		expect(calls).toBe(2);
 	});
 });
 
