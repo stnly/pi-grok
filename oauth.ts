@@ -21,7 +21,7 @@ const DEVICE_CODE_URL = `${ISSUER}/oauth2/device/code`;
 const DEVICE_TOKEN_URL = `${ISSUER}/oauth2/token`;
 const DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
 /** Client version label sent on the device-code auth requests. */
-const CLIENT_VERSION = process.env.PI_XAI_CLIENT_VERSION || "0.2.101";
+const CLIENT_VERSION = process.env.PI_XAI_CLIENT_VERSION || "1.0.46";
 const CLIENT_ID = process.env.PI_XAI_OAUTH_CLIENT_ID || "b1a00492-073a-47ea-816f-4c329264a828";
 // conversations:read/write let the proxy attach session history to
 // x-grok-conv-id so multi-turn OAuth chats can resume server-side state.

@@ -74,8 +74,8 @@ describe("buildProxyHeaders", () => {
 		// version gate, mode label, and the two auth-middleware headers mark
 		// an OAuth CLI session. No surface header.
 		expect(h["x-grok-client-identifier"]).toBe("grok-shell");
-		expect(h["User-Agent"]).toMatch(/^grok-shell\/0\.2\.101 \((macos|windows|linux); (aarch64|x86_64)\)$/);
-		expect(h["x-grok-client-version"]).toBe("0.2.101");
+		expect(h["User-Agent"]).toMatch(/^grok-shell\/1\.0\.46 \((macos|windows|linux); (aarch64|x86_64)\)$/);
+		expect(h["x-grok-client-version"]).toBe("1.0.46");
 		expect(h["x-grok-client-mode"]).toBe("interactive");
 		expect(h["X-XAI-Token-Auth"]).toBe("xai-grok-cli");
 		expect(h["x-authenticateresponse"]).toBe("authenticate-response");
