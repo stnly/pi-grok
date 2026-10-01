@@ -33,6 +33,7 @@
     "url": "https://github.com/stnly/pi-grok.git"
   },
   "devDependencies": {
+    "@earendil-works/pi-tui": "^0.99.2",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"
   }
