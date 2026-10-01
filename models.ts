@@ -66,11 +66,11 @@ let catalogCachePath = defaultCatalogCachePath();
 
 /**
  * Client version label sent on cli-chat-proxy requests. The proxy rejects
- * requests whose version it does not admit, so this is coupled to the proxy's
- * accepted set. Override with `PI_XAI_CLIENT_VERSION` to track a newer client
- * before a release ships the bump.
+ * requests whose version it does not admit (currently >= 1.0.13), so this is
+ * coupled to the proxy's accepted set. Override with `PI_XAI_CLIENT_VERSION`
+ * to track a newer client before a release ships the bump.
  */
-const GROK_CLIENT_VERSION = process.env.PI_XAI_CLIENT_VERSION || "0.2.101";
+const GROK_CLIENT_VERSION = process.env.PI_XAI_CLIENT_VERSION || "1.0.46";
 
 /** Session product label, overridable via `PI_XAI_CLIENT_NAME`. */
 const CLIENT_IDENTIFIER = process.env.PI_XAI_CLIENT_NAME || "grok-shell";
