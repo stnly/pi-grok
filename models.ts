@@ -284,12 +284,27 @@ interface ApiModelEntry {
 	/** cli-chat-proxy field. OpenAI-shaped catalogs send `context_length`. */
 	context_window?: number;
 	context_length?: number;
+	/**
+	 * Every window the proxy will accept. `context_window` is the default
+	 * (256k for grok-4.5/4.6/4.7); the extended window (500k) is only listed
+	 * here.
+	 */
+	context_windows?: number[];
 	max_output_tokens?: number;
 	supports_reasoning_effort?: boolean;
 }
 
-/** Live catalog window: proxy uses context_window; OpenAI uses context_length. */
+/**
+ * Live catalog window. The proxy sends a default `context_window` plus the
+ * full set in `context_windows`; use the largest advertised window so the
+ * extended window is what pi shows and compacts against. OpenAI-shaped
+ * catalogs only send `context_length`.
+ */
 function liveContextWindow(entry: ApiModelEntry): number | undefined {
+	const advertised = (entry.context_windows ?? []).filter(
+		(n) => typeof n === "number" && Number.isFinite(n) && n > 0,
+	);
+	if (advertised.length > 0) return Math.max(...advertised);
 	return entry.context_window ?? entry.context_length;
 }
 
@@ -339,8 +354,9 @@ function isChatModelEntry(id: string): boolean {
  * Returns `base` unchanged when `body` is null or has no `data` array.
  *
  * This is enrichment only: the live catalog is authoritative for the
- * context window (`context_window` on the proxy, `context_length` on an
- * OpenAI-shaped body) and `max_output_tokens` when present. The merged
+ * context window (the largest `context_windows` entry on the proxy, else
+ * `context_window`; `context_length` on an OpenAI-shaped body) and
+ * `max_output_tokens` when present. The merged
  * list follows the live response order, and newly discovered ids get
  * sensible defaults. It does not set routing. `rebuildModelsForOAuth` is
  * the single routing authority and sends every OAuth model through the

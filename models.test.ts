@@ -246,6 +246,18 @@ describe("mergeLiveModels", () => {
 		expect(known?.contextWindow).toBe(424_000);
 	});
 
+	it("uses the largest context_windows entry, not the default context_window", () => {
+		// grok-4.5, grok-4.6, and grok-4.7 all advertise context_window 256000
+		// with context_windows [256000, 500000]. The default is the short window;
+		// the extended window is what the model can actually hold.
+		for (const id of ["grok-4.5", "grok-4.6", "grok-4.7"]) {
+			const merged = mergeLiveModels(base, {
+				data: [{ id, context_window: 256_000, context_windows: [256_000, 500_000] }],
+			}).find((x) => x.id === id);
+			expect(merged?.contextWindow).toBe(500_000);
+		}
+	});
+
 	it("appends a newly discovered model id with sensible defaults", () => {
 		const merged = mergeLiveModels(base, {
 			data: [{ id: "grok-9", context_length: 2_000_000, max_output_tokens: 64_000 }],
