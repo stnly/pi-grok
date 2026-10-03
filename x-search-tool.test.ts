@@ -13,9 +13,15 @@ const OK_RESPONSE = {
 };
 
 function mockFetchOk(body: unknown) {
-	return vi.fn().mockResolvedValue(
-		new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }),
-	);
+	// A fresh Response per call. mockResolvedValue would reuse one Response,
+	// and its body can only be read once, so a second caller throws
+	// "Body has already been read".
+	return vi.fn().mockImplementation(() => Promise.resolve(
+		new Response(JSON.stringify(body), {
+			status: 200,
+			headers: { "Content-Type": "application/json" },
+		}),
+	));
 }
 
 function mockFetchStatus(status: number, body = "") {
@@ -36,7 +42,11 @@ describe("callXSearch", () => {
 
 		await callXSearch("tok", "https://cli-chat-proxy.grok.com/v1", "cats");
 
-		const [url, init] = fetchMock.mock.calls[0];
+		// buildProxyHeaders refreshes the client version in the background, so
+		// the first fetch may be the version pointer rather than the search.
+		const searchCall = fetchMock.mock.calls.find((c) => String(c[0]).endsWith("/responses"));
+		expect(searchCall).toBeTruthy();
+		const [url, init] = searchCall!;
 		expect(url).toBe("https://cli-chat-proxy.grok.com/v1/responses");
 		expect(init.method).toBe("POST");
 		expect(init.headers.Authorization).toBe("Bearer tok");

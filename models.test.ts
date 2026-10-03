@@ -706,11 +706,14 @@ describe("discovery cache", () => {
 			await new Promise((r) => setTimeout(r, 10));
 		}
 		expect(discoveryStatus().state).toBe("warm");
-		const fetchMock = globalThis.fetch as unknown as { mock: { calls: unknown[] } };
-		const before = fetchMock.mock.calls.length;
+		// Count only /models calls. buildProxyHeaders also refreshes the client
+		// version in the background, and that fetch is unrelated to discovery.
+		const fetchMock = globalThis.fetch as unknown as { mock: { calls: unknown[][] } };
+		const modelCalls = () => fetchMock.mock.calls.filter((c) => String(c[0]).endsWith("/models")).length;
+		const before = modelCalls();
 		triggerDiscovery("token", CLI_PROXY_URL);
 		await new Promise((r) => setTimeout(r, 30));
-		expect(fetchMock.mock.calls.length).toBe(before);
+		expect(modelCalls()).toBe(before);
 	});
 
 	it("notifies onCatalogUpdated after a successful fetch", async () => {
