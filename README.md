@@ -178,7 +178,7 @@ If your organization enforces Zero Data Retention, the choice is locked and
 | `PI_XAI_OAUTH_CLIENT_ID` | built-in |
 | `PI_XAI_OAUTH_SCOPE` | `openid profile email offline_access grok-cli:access api:access conversations:read conversations:write` |
 | `PI_XAI_LOGIN_METHOD` | `device` (OAuth device flow, works everywhere). Set `callback` (or `browser`) to use the browser + loopback-callback flow instead, which auto-redirects but needs a reachable `127.0.0.1` port and a local browser. |
-| `PI_XAI_CLIENT_VERSION` | `1.0.46` (client version label sent to the proxy) |
+| `PI_XAI_CLIENT_VERSION` | unset (pins the client version sent to the proxy; otherwise the latest `stable` version from `x.ai/cli`, cached in `version.json`, falling back to `1.0.46`) |
 | `PI_XAI_CLIENT_NAME` | `grok-shell` (session product label sent to the proxy) |
 | `XAI_OAUTH_TOKEN` | skip OAuth, use raw token (no refresh, no discovery; proxy routing still applies) |
 | `PI_XAI_X_SEARCH` | `true` |

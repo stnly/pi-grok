@@ -1,4 +1,8 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@earendil-works/pi-coding-agent", () => ({
+	getAgentDir: () => process.env.PI_GROK_TEST_AGENT_DIR ?? "",
+}));
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -87,6 +91,7 @@ describe("buildProxyHeaders", () => {
 		// version gate, mode label, and the two auth-middleware headers mark
 		// an OAuth CLI session. No surface header.
 		expect(h["x-grok-client-identifier"]).toBe("grok-shell");
+		// With no env pin and no cached version, the shipped floor is sent.
 		expect(h["User-Agent"]).toMatch(/^grok-shell\/1\.0\.46 \((macos|windows|linux); (aarch64|x86_64)\)$/);
 		expect(h["x-grok-client-version"]).toBe("1.0.46");
 		expect(h["x-grok-client-mode"]).toBe("interactive");
@@ -105,6 +110,28 @@ describe("buildProxyHeaders", () => {
 
 	it("returns a fresh object per call (no shared reference)", () => {
 		expect(buildProxyHeaders()).not.toBe(buildProxyHeaders());
+	});
+
+	it("picks up a client version cached after the first call", async () => {
+		// The headers stored on a model are a snapshot from registration. A
+		// request has to call buildProxyHeaders again to see a version that
+		// landed in version.json afterwards, so resolve it per call.
+		const dir = await mkdtemp(join(tmpdir(), "pi-grok-headers-"));
+		process.env.PI_GROK_TEST_AGENT_DIR = dir;
+		try {
+			expect(buildProxyHeaders()["x-grok-client-version"]).toBe("1.0.46");
+			await mkdir(join(dir, "cache", "pi-grok"), { recursive: true });
+			await writeFile(join(dir, "cache", "pi-grok", "version.json"), JSON.stringify({
+				version: "1.2.3",
+				fetchedAt: Date.now(),
+			}));
+			const next = buildProxyHeaders("grok-4.7");
+			expect(next["x-grok-client-version"]).toBe("1.2.3");
+			expect(next["User-Agent"]).toMatch(/^grok-shell\/1\.2\.3 /);
+		} finally {
+			delete process.env.PI_GROK_TEST_AGENT_DIR;
+			await rm(dir, { recursive: true, force: true });
+		}
 	});
 });
 

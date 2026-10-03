@@ -5,6 +5,7 @@
  */
 
 import { readBoundedJson, RedirectError, safeFetch } from "./safe-fetch.js";
+import { resolveClientVersion } from "./client-version.js";
 import {
 	CATALOG_BOUNDED_JSON_OPTIONS,
 	CATALOG_FRESH_TTL_MS,
@@ -64,14 +65,6 @@ function defaultCatalogCachePath(): string {
 /** Path used for the on-disk cache. Overridable for tests via _setCatalogCachePathForTests. */
 let catalogCachePath = defaultCatalogCachePath();
 
-/**
- * Client version label sent on cli-chat-proxy requests. The proxy rejects
- * requests whose version it does not admit (currently >= 1.0.13), so this is
- * coupled to the proxy's accepted set. Override with `PI_XAI_CLIENT_VERSION`
- * to track a newer client before a release ships the bump.
- */
-const GROK_CLIENT_VERSION = process.env.PI_XAI_CLIENT_VERSION || "1.0.46";
-
 /** Session product label, overridable via `PI_XAI_CLIENT_NAME`. */
 const CLIENT_IDENTIFIER = process.env.PI_XAI_CLIENT_NAME || "grok-shell";
 
@@ -102,9 +95,9 @@ function platformLabel(): string {
  */
 export function buildProxyHeaders(modelId?: string): Record<string, string> {
 	const headers: Record<string, string> = {
-		"User-Agent": `${CLIENT_IDENTIFIER}/${GROK_CLIENT_VERSION} (${platformLabel()})`,
+		"User-Agent": `${CLIENT_IDENTIFIER}/${resolveClientVersion()} (${platformLabel()})`,
 		"x-grok-client-identifier": CLIENT_IDENTIFIER,
-		"x-grok-client-version": GROK_CLIENT_VERSION,
+		"x-grok-client-version": resolveClientVersion(),
 		"x-grok-client-mode": "interactive",
 		"X-XAI-Token-Auth": "xai-grok-cli",
 		"x-authenticateresponse": "authenticate-response",

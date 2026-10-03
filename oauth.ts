@@ -11,6 +11,7 @@ import { createServer } from "node:http";
 import { XaiErrorCode, XaiOAuthError, classifyHttpStatus } from "./errors.js";
 import { safeFetch, readBoundedText, readBoundedJson } from "./safe-fetch.js";
 import { parseBoundedJson } from "./bounded-json.js";
+import { resolveClientVersion } from "./client-version.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -20,8 +21,6 @@ const DISCOVERY_URL = `${ISSUER}/.well-known/openid-configuration`;
 const DEVICE_CODE_URL = `${ISSUER}/oauth2/device/code`;
 const DEVICE_TOKEN_URL = `${ISSUER}/oauth2/token`;
 const DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
-/** Client version label sent on the device-code auth requests. */
-const CLIENT_VERSION = process.env.PI_XAI_CLIENT_VERSION || "1.0.46";
 const CLIENT_ID = process.env.PI_XAI_OAUTH_CLIENT_ID || "b1a00492-073a-47ea-816f-4c329264a828";
 // conversations:read/write let the proxy attach session history to
 // x-grok-conv-id so multi-turn OAuth chats can resume server-side state.
@@ -913,7 +912,7 @@ async function requestDeviceCode(signal?: AbortSignal): Promise<DeviceCodeRespon
 		method: "POST",
 		headers: {
 			"Content-Type": "application/x-www-form-urlencoded",
-			"x-grok-client-version": CLIENT_VERSION,
+			"x-grok-client-version": resolveClientVersion(),
 			"x-grok-client-surface": "cli",
 		},
 		body,
@@ -1024,7 +1023,7 @@ export async function loginDeviceCode(
 			method: "POST",
 			headers: {
 				"Content-Type": "application/x-www-form-urlencoded",
-				"x-grok-client-version": CLIENT_VERSION,
+				"x-grok-client-version": resolveClientVersion(),
 				"x-grok-client-surface": "cli",
 			},
 			body: new URLSearchParams({

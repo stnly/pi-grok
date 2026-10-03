@@ -122,8 +122,15 @@ function streamGrok(
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
 	const sessionId = options?.sessionId;
+	// The headers stored on the model were built once, at provider
+	// registration, so their client version goes stale for the rest of the
+	// session. Rebuild the version-bearing headers per request; the streamer
+	// spreads options.headers over model.headers, so these win.
+	const fresh = buildProxyHeaders(model.id);
 	const headers = {
 		...options?.headers,
+		"User-Agent": fresh["User-Agent"],
+		"x-grok-client-version": fresh["x-grok-client-version"],
 		...(sessionId ? { "x-grok-conv-id": sessionId } : {}),
 	};
 
