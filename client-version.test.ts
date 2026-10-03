@@ -7,7 +7,7 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 	getAgentDir: () => process.env.PI_GROK_TEST_AGENT_DIR ?? "",
 }));
 
-import { CLIENT_VERSION_FLOOR, compareVersions, resolveClientVersion } from "./client-version.js";
+import { CLIENT_VERSION_FLOOR, compareVersions, resetClientVersionForTests, resolveClientVersion } from "./client-version.js";
 
 describe("compareVersions", () => {
 	it("orders by major, then minor, then patch", () => {
@@ -30,6 +30,7 @@ describe("resolveClientVersion", () => {
 		tmpDir = await mkdtemp(join(tmpdir(), "pi-grok-version-"));
 		process.env.PI_GROK_TEST_AGENT_DIR = tmpDir;
 		delete process.env.PI_XAI_CLIENT_VERSION;
+		resetClientVersionForTests();
 		globalThis.fetch = vi.fn(async () => new Response("not called", { status: 500 })) as typeof fetch;
 	});
 
@@ -85,6 +86,18 @@ describe("resolveClientVersion", () => {
 		resolveClientVersion();
 		await new Promise((r) => setTimeout(r, 50));
 		await expect(readFile(join(tmpDir, "cache", "pi-grok", "version.json"), "utf8")).rejects.toThrow();
+	});
+
+	it("does not refetch on every call while the pointer is down", async () => {
+		const fetchMock = vi.fn(async () => new Response("nope", { status: 500 }));
+		globalThis.fetch = fetchMock as typeof fetch;
+		resolveClientVersion();
+		// One attempt tries both pointers, so wait until both have been called.
+		await vi.waitFor(() => expect(fetchMock.mock.calls.length).toBe(2));
+		resolveClientVersion();
+		resolveClientVersion();
+		await new Promise((r) => setTimeout(r, 50));
+		expect(fetchMock.mock.calls.length).toBe(2);
 	});
 
 	it("rejects a pointer body that is not a version", async () => {

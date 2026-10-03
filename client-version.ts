@@ -110,6 +110,16 @@ async function fetchPointer(url: string): Promise<string | null> {
 }
 
 let refreshInFlight: Promise<void> | null = null;
+/** When the last attempt finished. A failure writes no cache, so without this
+ * the next call would fetch again immediately and every request would retry. */
+let lastAttemptAt = 0;
+
+/** Forget the last attempt. Tests only, so one test's failure does not
+ * suppress the next test's fetch. */
+export function resetClientVersionForTests(): void {
+	lastAttemptAt = 0;
+	refreshInFlight = null;
+}
 
 function refresh(path: string): Promise<void> {
 	if (refreshInFlight) return refreshInFlight;
@@ -122,7 +132,10 @@ function refresh(path: string): Promise<void> {
 				return;
 			} catch { /* try the fallback pointer */ }
 		}
-	})().finally(() => { refreshInFlight = null; });
+	})().finally(() => {
+		lastAttemptAt = Date.now();
+		refreshInFlight = null;
+	});
 	return refreshInFlight;
 }
 
@@ -139,7 +152,10 @@ export function resolveClientVersion(): string {
 	if (override) return override;
 	const path = versionCachePath();
 	const cached = readCache(path);
-	if (!cached || Date.now() - cached.fetchedAt > CLIENT_VERSION_TTL_MS) {
+	const stale = !cached || Date.now() - cached.fetchedAt > CLIENT_VERSION_TTL_MS;
+	// A failed attempt is remembered like a success: retry only after the TTL,
+	// so a pointer outage does not fetch on every request.
+	if (stale && Date.now() - lastAttemptAt > CLIENT_VERSION_TTL_MS) {
 		void refresh(path);
 	}
 	return cached?.version ?? CLIENT_VERSION_FLOOR;

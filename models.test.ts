@@ -573,6 +573,14 @@ describe("discovery cache", () => {
 		expect((globalThis.fetch as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBe(callsBefore + 1);
 	});
 
+	it("refreshCatalogNow notifies onCatalogUpdated so the provider re-registers", async () => {
+		let hits = 0;
+		onCatalogUpdated(() => { hits++; });
+		await refreshCatalogNow("token");
+		expect(hits).toBe(1);
+		onCatalogUpdated(null);
+	});
+
 	it("reports cold state before any fetch and warm after", async () => {
 		expect(discoveryStatus().state).toBe("cold");
 		expect(discoveryStatus().lastError).toBeNull();

@@ -526,6 +526,13 @@ export async function refreshCatalogNow(
 		discoveryFetchedAt = Date.now();
 		discoveryLastToken = accessToken;
 		void writeCachedCatalog(catalogCachePath, result.body, discoveryFetchedAt);
+		// Re-register the provider the same way a background discovery does, so
+		// /xai-status and anything else reading the registry sees the new list.
+		// /model publishes the returned list itself; this covers the other readers.
+		if (catalogUpdatedHandler) {
+			try { catalogUpdatedHandler(result.body); }
+			catch { /* host callback must not break the refresh */ }
+		}
 	} else if (!result.ok) {
 		discoveryLastError = result.error;
 	}
