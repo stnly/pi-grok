@@ -84,7 +84,15 @@ function callbacks(signal?: AbortSignal): { cbs: OAuthLoginCallbacks; auth: { ur
 	const auth = { url: undefined as string | undefined, instructions: undefined as string | undefined };
 	const cbs: OAuthLoginCallbacks = {
 		onAuth: (info) => { auth.url = info.url; auth.instructions = info.instructions; },
+		// pi-ai 0.87 requires onDeviceCode, and loginDeviceCode prefers it over
+		// onAuth when present. Record the same fields the onAuth fallback would so
+		// the assertions below keep checking what the user is shown.
+		onDeviceCode: (info) => {
+			auth.url = info.verificationUri;
+			auth.instructions = info.userCode;
+		},
 		onPrompt: async () => "",
+		onSelect: async () => undefined,
 		...(signal ? { signal } : {}),
 	};
 	return { cbs, auth };

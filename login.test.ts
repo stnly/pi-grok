@@ -159,7 +159,9 @@ describe("login flow dispatch", () => {
 
 		const promise = login({
 			onAuth: () => {},
+			onDeviceCode: () => {},
 			onPrompt: async () => "",
+			onSelect: async () => undefined,
 			signal: AbortSignal.timeout(200),
 		});
 		try { await promise; } catch { /* expected: abort */ }
@@ -204,7 +206,9 @@ describe("login (callback server integration)", () => {
 			onAuth: (info) => {
 				authUrl = info.url;
 			},
+			onDeviceCode: () => {},
 			onPrompt: async () => "",
+			onSelect: async () => undefined,
 			signal: undefined,
 		});
 
@@ -239,7 +243,9 @@ describe("login (callback server integration)", () => {
 			onAuth: (info) => {
 				authUrl = info.url;
 			},
+			onDeviceCode: () => {},
 			onPrompt: async () => "",
+			onSelect: async () => undefined,
 			signal: undefined,
 		});
 		// Attach the rejection handler up front so a fast reject never becomes
