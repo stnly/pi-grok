@@ -12,12 +12,31 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { CLI_PROXY_BASE_URL, buildProxyHeaders } from "./models.js";
+import { CLI_PROXY_BASE_URL, applyDiscoveredModels, buildProxyHeaders, resolveModels } from "./models.js";
 import { readBoundedJson, readBoundedText, safeFetch } from "./safe-fetch.js";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
-const SEARCH_MODEL = process.env.PI_XAI_X_SEARCH_MODEL ?? "grok-4.5";
+/** Used when the catalog has no plain `grok-4.N` entry. */
+const SEARCH_MODEL_FALLBACK = "grok-4.7";
+
+/**
+ * Model for the internal search call. `PI_XAI_X_SEARCH_MODEL` wins. Otherwise
+ * the highest plain `grok-M.N` in the live catalog, compared by major then
+ * minor (grok-4.7 today, grok-5.0 once the proxy lists it). Dated and variant
+ * ids such as grok-4.20-0309 and grok-4.7-build-fast are not candidates.
+ * Resolved per call because discovery commits the catalog after the extension
+ * loads.
+ */
+export function resolveSearchModel(): string {
+	const override = process.env.PI_XAI_X_SEARCH_MODEL;
+	if (override) return override;
+	const ranked = applyDiscoveredModels(resolveModels())
+		.map((m) => /^grok-(\d+)\.(\d+)$/.exec(m.id))
+		.filter((match): match is RegExpExecArray => match !== null)
+		.sort((a, b) => Number(a[1]) - Number(b[1]) || Number(a[2]) - Number(b[2]));
+	return ranked.at(-1)?.[0] ?? SEARCH_MODEL_FALLBACK;
+}
 /** Reject any x_search response body larger than this before parsing. */
 const SEARCH_MAX_RESPONSE_BYTES = 256 * 1024;
 /** Deadline for the x_search model call (search X + synthesize). Measured
@@ -77,8 +96,9 @@ export async function callXSearch(
 	if (options?.fromDate) xSearchTool.from_date = options.fromDate;
 	if (options?.toDate) xSearchTool.to_date = options.toDate;
 
+	const model = resolveSearchModel();
 	const payload = {
-		model: SEARCH_MODEL,
+		model,
 		input: [{ role: "user", content: query }],
 		tools: [xSearchTool],
 		store: false,
@@ -89,7 +109,7 @@ export async function callXSearch(
 		headers: {
 			"Content-Type": "application/json",
 			Authorization: `Bearer ${apiKey}`,
-			...buildProxyHeaders(SEARCH_MODEL),
+			...buildProxyHeaders(model),
 		},
 		body: JSON.stringify(payload),
 		// x_search is a model inference call (search X, synthesize an answer),

@@ -182,7 +182,7 @@ If your organization enforces Zero Data Retention, the choice is locked and
 | `PI_XAI_CLIENT_NAME` | `grok-shell` (session product label sent to the proxy) |
 | `XAI_OAUTH_TOKEN` | skip OAuth, use raw token (no refresh, no discovery; proxy routing still applies) |
 | `PI_XAI_X_SEARCH` | `true` |
-| `PI_XAI_X_SEARCH_MODEL` | `grok-4.5` |
+| `PI_XAI_X_SEARCH_MODEL` | highest `grok-M.N` in the catalog, else `grok-4.7` |
 
 ## Remote / SSH
 
@@ -208,7 +208,7 @@ Enabled by default. Disable with:
 export PI_XAI_X_SEARCH=false
 ```
 
-The model used for the internal search call defaults to `grok-4.5`. Change it with:
+The model used for the internal search call is the highest plain `grok-M.N` in the live catalog, compared by major then minor (`grok-4.7` today, and `grok-5.0` once the proxy lists it). Dated ids such as `grok-4.20-0309-reasoning` are not candidates. When the catalog has no such id, the call uses `grok-4.7`. Pin a model with:
 
 ```bash
 export PI_XAI_X_SEARCH_MODEL=grok-4.20-0309-reasoning

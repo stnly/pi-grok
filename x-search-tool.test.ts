@@ -43,7 +43,7 @@ describe("callXSearch", () => {
 		expect(init.headers["X-XAI-Token-Auth"]).toBe(buildProxyHeaders()["X-XAI-Token-Auth"]);
 		// The search model is carried as the proxy's model-override header.
 		expect(init.headers["x-grok-model-override"]).toBe(
-			process.env.PI_XAI_X_SEARCH_MODEL ?? "grok-4.5",
+			process.env.PI_XAI_X_SEARCH_MODEL ?? "grok-4.7",
 		);
 	});
 
