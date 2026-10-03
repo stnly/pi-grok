@@ -55,8 +55,6 @@ const USER_ID_PATTERN = /^[\x21-\x7e]+$/;
 const RFC3339_PATTERN =
 	/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|([+-])(\d{2}):(\d{2}))$/;
 
-// ─── Types ────────────────────────────────────────────
-
 /** One product's usage breakdown (e.g. GrokBuild). */
 export interface XaiProductUsage {
 	product: string;
@@ -111,8 +109,6 @@ export class XaiUsageError extends Error {
 		this.name = "XaiUsageError";
 	}
 }
-
-// ─── Response parsing ───────────────────────────────────────────────────────
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
 	return value && typeof value === "object" && !Array.isArray(value)
@@ -337,8 +333,6 @@ export function parseUsageBody(body: unknown): XaiUsageSnapshot {
 	return snapshot;
 }
 
-// ─── Network ───────────────────────────────────────────────────────────────
-
 function billingHeaders(token: string, userId: string): Record<string, string> {
 	return {
 		Authorization: `Bearer ${token}`,
@@ -405,8 +399,6 @@ export async function fetchUsage(token: string): Promise<XaiUsageSnapshot> {
 	}
 	return parseUsageBody(parsed);
 }
-
-// ─── Formatting ────────────────────────────────────────────────────────────
 
 function formatCents(cents: number): string {
 	return `$${(cents / 100).toFixed(2)}`;

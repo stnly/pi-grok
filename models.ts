@@ -16,7 +16,6 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
 
-// ─── Cost constants ($/M tokens, base <200k-prompt tier) ───────────────────────
 // From the xAI public pricing page. The cost shape is flat, so the base tier
 // is used; long-context (>=200k prompt) pricing is not modeled. cacheWrite is
 // not published for these models, so it stays 0.
@@ -26,8 +25,6 @@ const COST_420 = { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 };
 // grok-4.5 / 4.6 / 4.7: cached input is $0.50/M (higher than the $0.20 used by
 // 4.20/4.3). grok-4.6 and grok-4.7 shipped at the same per-token price as grok-4.5.
 export const COST_45 = { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 };
-
-// ─── Model type ───────────────────────────────────────────────────────────────
 
 export interface XaiModelConfig {
 	id: string;
@@ -44,8 +41,6 @@ export interface XaiModelConfig {
 	/** Headers to send with requests for this model. */
 	headers?: Record<string, string>;
 }
-
-// ─── Hardcoded fallback catalog ───────────────────────────────────────────────
 
 // CLI proxy base URL for models not available on the public API.
 export const CLI_PROXY_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
@@ -196,8 +191,6 @@ export const FALLBACK_MODELS: XaiModelConfig[] = [
 	},
 ];
 
-// ─── Reasoning-effort allowlist ───────────────────────────────────────────────
-
 /**
  * Only these model prefixes support `reasoning.effort` in the Responses API.
  * Everything else gets the param stripped in the sanitizer.
@@ -226,8 +219,6 @@ export function thinkingLevelMapFor(
 	if (!reasoning || !supportsReasoningEffort(modelId)) return undefined;
 	return { off: null, minimal: null, xhigh: "xhigh" };
 }
-
-// ─── PI_XAI_OAUTH_MODELS env override ────────────────────────────────────────
 
 /** Parse `PI_XAI_OAUTH_MODELS` into a list of model ids (empty = no filter). */
 function envModelIds(): string[] {
@@ -267,8 +258,6 @@ export function filterModelsByEnv(models: XaiModelConfig[], envIds: string[]): X
 export function resolveModels(): XaiModelConfig[] {
 	return filterModelsByEnv(FALLBACK_MODELS, envModelIds());
 }
-
-// ─── Live catalog ────────────────────────────────────────────────────────────
 
 interface ApiModelEntry {
 	id: string;
@@ -337,8 +326,6 @@ function isChatModelEntry(id: string): boolean {
 	if (lower.includes("tts")) return false;
 	return true;
 }
-
-// ─── Live catalog merge ──────────────────────────────────────────────────────
 
 /**
  * Merge a live `/models` response into the fallback list.
@@ -409,8 +396,6 @@ export function mergeLiveModels(
 	return merged;
 }
 
-// ─── Live catalog fetch ───────────────────────────────────────────────────────
-
 /** Reject a live `/models` body larger than this before parsing. */
 const CATALOG_MAX_RESPONSE_BYTES = 256 * 1024;
 
@@ -467,8 +452,6 @@ async function fetchLiveCatalog(
 		return { ok: false, retryable: true, error: "catalog fetch failed (network)" };
 	}
 }
-
-// ─── Discovery cache ─────────────────────────────────────────────────────────
 
 /**
  * Raw `/models` body from the last successful live fetch.

@@ -13,8 +13,6 @@ import { safeFetch, readBoundedText, readBoundedJson } from "./safe-fetch.js";
 import { parseBoundedJson } from "./bounded-json.js";
 import { resolveClientVersion } from "./client-version.js";
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-
 const DEFAULT_BASE_URL = "https://api.x.ai/v1";
 const ISSUER = "https://auth.x.ai";
 const DISCOVERY_URL = `${ISSUER}/.well-known/openid-configuration`;
@@ -43,8 +41,6 @@ export function parseCallbackPort(raw: string | undefined): number {
 	const parsed = Number.parseInt(raw, 10);
 	return Number.isFinite(parsed) && parsed > 0 && parsed < 65536 ? parsed : DEFAULT_CALLBACK_PORT;
 }
-
-// ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface XaiDiscovery {
 	authorization_endpoint: string;
@@ -97,8 +93,6 @@ export function outcomeToError(outcome: Extract<CallbackOutcome, { kind: "cancel
 	return new XaiOAuthError(outcome.message, XaiErrorCode.AUTHORIZATION_FAILED);
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
 export function getBaseUrl(): string {
 	return (
 		process.env.PI_XAI_BASE_URL ||
@@ -114,15 +108,11 @@ function base64Url(buffer: ArrayBuffer | Uint8Array): string {
 	return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-// ─── PKCE ─────────────────────────────────────────────────────────────────────
-
 async function generatePKCE(): Promise<{ verifier: string; challenge: string }> {
 	const verifier = base64Url(crypto.getRandomValues(new Uint8Array(32)));
 	const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
 	return { verifier, challenge: base64Url(hash) };
 }
-
-// ─── Manual-paste parsing ────────────────────────────────────────────────────
 
 /**
  * Parse a pasted redirect URL (or bare code) the user may have dropped into
@@ -139,7 +129,7 @@ export function parseRedirectUrl(input: string): { code?: string; state?: string
 			state: url.searchParams.get("state") ?? undefined,
 		};
 	} catch {
-		// not a URL, fall through
+		// a bare code or a raw querystring, handled below
 	}
 	if (value.includes("code=")) {
 		const params = new URLSearchParams(value);
@@ -150,8 +140,6 @@ export function parseRedirectUrl(input: string): { code?: string; state?: string
 	}
 	return { code: value };
 }
-
-// ─── Endpoint validation ──────────────────────────────────────────────────────
 
 /**
  * True for HTTPS URLs on the xAI origin (x.ai / *.x.ai). Used both to pin OIDC
@@ -188,8 +176,6 @@ export function validateEndpoint(value: string, field: string): string {
 	}
 	return url.toString();
 }
-
-// ─── OIDC Discovery ──────────────────────────────────────────────────────────
 
 export async function discover(): Promise<XaiDiscovery> {
 	let response: Response;
@@ -255,8 +241,6 @@ export async function discover(): Promise<XaiDiscovery> {
 		id_token_signing_alg_values_supported: algs,
 	};
 }
-
-// ─── Loopback callback server ────────────────────────────────────────────────
 
 /**
  * Resolve as soon as one of {callback, timeout, abort} fires, and clean up the
@@ -421,8 +405,6 @@ function startCallbackServer(): Promise<{
 	})();
 }
 
-// ─── JWT / id_token validation ──────────────────────────────────────────────
-
 interface IdTokenClaims {
 	iss?: string;
 	aud?: string | string[];
@@ -438,7 +420,6 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
 	const parts = token.split(".");
 	if (parts.length !== 3) return null;
 	try {
-		// JWT payload is base64url without padding.
 		const b64 = parts[1]!.replace(/-/g, "+").replace(/_/g, "/");
 		const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
 		return JSON.parse(atob(padded)) as Record<string, unknown>;
@@ -451,8 +432,6 @@ export function decodeIdToken(token: string): IdTokenClaims | null {
 	return decodeJwtPayload(token) as IdTokenClaims | null;
 }
 
-// ─── Access-token expiry (JWT exp) ────────────────────────────────────────────
-
 /** Decode the `exp` claim (seconds since epoch) from an access-token JWT.
  * Returns null for a non-JWT or unparseable token, or one with no numeric exp.
  * Used to derive the real expiry independent of the stored timestamp, which
@@ -462,7 +441,6 @@ export function decodeJwtExp(token: string): number | null {
 	if (!claims) return null;
 	return typeof claims.exp === "number" ? claims.exp : null;
 }
-
 
 /** Compute the stored expiry timestamp, capped by the access token's real JWT
  * `exp` when present, so the host refreshes no later than the token actually
@@ -508,7 +486,7 @@ export function validateIdToken(idToken: string, expectedNonce: string): void {
 	try {
 		issUrl = new URL(iss);
 	} catch {
-		// unparseable issuer URL, fall through to the rejection below
+		// rejected by the origin check below
 	}
 	if (!issUrl || !isXaiOrigin(issUrl)) {
 		throw new XaiOAuthError(
@@ -557,8 +535,6 @@ export function validateIdToken(idToken: string, expectedNonce: string): void {
 		);
 	}
 }
-
-// ─── id_token signature verification ───────────────────────────────────────
 
 /** Pinned expected signing algorithm for xAI id_tokens. */
 const ID_TOKEN_EXPECTED_ALG = "ES256";
@@ -814,8 +790,6 @@ export async function verifyIdTokenSignature(idToken: string, jwksUri: string): 
 	}
 }
 
-// ─── Token exchange ──────────────────────────────────────────────────────────
-
 async function exchangeCode(
 	tokenEndpoint: string,
 	code: string,
@@ -890,8 +864,6 @@ async function exchangeCode(
 		baseUrl: getBaseUrl(),
 	};
 }
-
-// ─── Device-code login ─────────────────────────────────────────────────────
 
 interface DeviceCodeResponse {
 	device_code: string;
@@ -1009,7 +981,7 @@ export async function loginDeviceCode(
 	};
 
 	for (;;) {
-		// Sleep first: an immediate poll on a fresh code only returns pending.
+		// An immediate poll on a fresh code only returns pending.
 		await sleep(interval * 1000);
 		if (Date.now() > deadline) {
 			throw new XaiOAuthError(
@@ -1120,8 +1092,6 @@ async function shapeDeviceToken(
 	};
 }
 
-// ─── Login (called by pi's /login flow) ──────────────────────────────────────
-
 export async function login(
 	callbacks: import("@earendil-works/pi-ai").OAuthLoginCallbacks,
 ): Promise<import("@earendil-works/pi-ai").OAuthCredentials> {
@@ -1146,7 +1116,6 @@ export async function login(
 	const callback = await startCallbackServer();
 
 	try {
-		// Build authorize URL
 		const authUrl = new URL(discovery.authorization_endpoint);
 		authUrl.searchParams.set("response_type", "code");
 		authUrl.searchParams.set("client_id", CLIENT_ID);
@@ -1273,8 +1242,6 @@ export async function login(
 		if (callback.server.listening) callback.server.close();
 	}
 }
-
-// ─── Token refresh ────────────────────────────────────────────────────────────
 
 /** In-flight refreshes keyed by refresh token. The token is single-use, so two
  * concurrent refreshes with the same token race and the loser fails with a

@@ -20,8 +20,6 @@ const PROXY_TIMEOUT_MS = 10_000;
 /** Reject any proxy response body larger than this before parsing. */
 const PROXY_MAX_RESPONSE_BYTES = 64 * 1024;
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
 /**
  * Shape of GET /user from the cli-chat-proxy.
  *
@@ -51,8 +49,6 @@ export interface XaiUser {
 	/** Present only when Zero Data Retention is enforced on the account. */
 	isZdr?: boolean;
 }
-
-// ─── Proxy calls ──────────────────────────────────────────────────────────────
 
 function proxyHeaders(token: string, json: boolean): Record<string, string> {
 	return {
@@ -149,8 +145,6 @@ export async function setCodingDataRetention(token: string, optOut: boolean): Pr
 	return body.codingDataRetentionOptOut ?? optOut;
 }
 
-// ─── Privacy argument parsing ────────────────────────────────────────────────
-
 type PrivacyArg =
 	| { kind: "select" }
 	| { kind: "set"; optOut: boolean }
@@ -186,8 +180,6 @@ export function parsePrivacyArg(arg: string): PrivacyArg {
 	if (key in PRIVACY_ALIASES) return { kind: "set", optOut: PRIVACY_ALIASES[key] };
 	return { kind: "invalid", arg };
 }
-
-// ─── Privacy selection ───────────────────────────────────────────────────────
 
 /** Human-readable description of what each retention mode does. Shared by
  * the picker labels and the status line so the policy wording can't drift
@@ -240,8 +232,6 @@ export function privacyUsage(): string {
 		.join(", ");
 	return `Valid: opt-in (${ins}) | opt-out (${outs})`;
 }
-
-// ─── Status formatting ───────────────────────────────────────────────────────
 
 /** One-line privacy label for the current retention state. */
 export function privacyLine(user: Pick<XaiUser, "codingDataRetentionOptOut" | "isZdr">): string {

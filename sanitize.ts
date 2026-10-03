@@ -29,8 +29,6 @@ import { extname, isAbsolute, resolve } from "path";
 import { fileURLToPath } from "url";
 import { supportsReasoningEffort } from "./models.js";
 
-// ─── Content text extraction ─────────────────────────────────────────────────
-
 function textFromContent(content: unknown): string {
 	if (typeof content === "string") return content;
 	if (!Array.isArray(content)) return "";
@@ -45,8 +43,6 @@ function textFromContent(content: unknown): string {
 		.filter(Boolean)
 		.join("\n");
 }
-
-// ─── Image helpers ────────────────────────────────────────────────────────────
 
 function stripShellQuotes(value: string): string {
 	const trimmed = value.trim();
@@ -123,8 +119,6 @@ function normalizeImageInput(value: unknown): string | undefined {
 	return `data:${mimeType};base64,${data}`;
 }
 
-// ─── Content part normalization ───────────────────────────────────────────────
-
 function isInputImagePart(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === "object" && (value as Record<string, unknown>).type === "input_image";
 }
@@ -180,8 +174,6 @@ function normalizeImageParts(value: unknown): unknown {
 	return obj;
 }
 
-// ─── function_call_output rewrite ─────────────────────────────────────────────
-
 /**
  * xAI rejects image arrays inside `function_call_output.output`.  Extract
  * images into a separate user message so they're delivered as normal input.
@@ -234,8 +226,6 @@ function rewriteFunctionCallOutput(
 	return rewritten;
 }
 
-// ─── Main sanitization ────────────────────────────────────────────────────────
-
 /** Drop `enum` arrays that contain a slash-bearing string from tool schemas.
  * xAI's Responses endpoint rejects tool definitions whose enum values contain
  * a `/` (422). Walk the schema objects recursively and delete the offending
@@ -275,17 +265,14 @@ export function sanitizePayload(
 	// rather than mutate.
 	const next: Record<string, unknown> = { ...params };
 
-	// ── Sanitize input array ──────────────────────────────────────────────
 	if (Array.isArray(next.input)) {
 		let input = (next.input as unknown[])
 			.map((item: unknown) => {
 				if (!item || typeof item !== "object") return item;
 				const obj = item as Record<string, unknown>;
 
-				// Strip replayed reasoning items
 				if (obj.type === "reasoning") return null;
 
-				// Drop empty string content
 				if (typeof obj.content === "string" && obj.content.length === 0)
 					return null;
 
@@ -318,18 +305,14 @@ export function sanitizePayload(
 		input = rewriteFunctionCallOutput(input);
 
 		next.input = input;
-	} else if (typeof next.input === "string") {
-		// String input is valid and should stay string-shaped.
 	}
 
-	// ── response_format → text.format ────────────────────────────────────
-	// xAI uses { text: { format: ... } } instead of { response_format: ... }.
+	// xAI takes { text: { format } } where OpenAI takes { response_format }.
 	if (next.response_format && !next.text) {
 		next.text = { format: next.response_format };
 		delete next.response_format;
 	}
 
-	// ── Reasoning effort ──────────────────────────────────────────────────
 	if (supportsReasoningEffort(modelId)) {
 		// This model supports the effort dial. Strip `summary`; xAI doesn't
 		// support it. Preserve any other reasoning keys rather than collapsing
@@ -344,7 +327,6 @@ export function sanitizePayload(
 		delete next.reasoning;
 	}
 
-	// ── Encrypted reasoning replay ─────────────────────────────────────────
 	// The cli-chat-proxy honors `include: ["reasoning.encrypted_content"]` and
 	// returns an encrypted reasoning blob, which lets prior reasoning be
 	// replayed across turns without re-deriving it. Ensure it for reasoning
@@ -361,10 +343,8 @@ export function sanitizePayload(
 		}
 	}
 
-	// xAI doesn't support prompt_cache_retention.
 	delete next.prompt_cache_retention;
 
-	// ── OpenAI-only fields xAI rejects (422) ───────────────────────────────
 	delete next.seed;
 	delete next.parallel_tool_calls;
 	delete next.service_tier;
@@ -380,7 +360,6 @@ export function sanitizePayload(
 		else delete next.tools;
 	}
 
-	// Clamp sampling params into xAI's accepted ranges.
 	if (typeof next.temperature === "number") {
 		next.temperature = Math.max(0, Math.min(2, next.temperature));
 	}
@@ -388,7 +367,7 @@ export function sanitizePayload(
 		next.top_p = Math.max(0, Math.min(1, next.top_p));
 	}
 
-	// Add prompt_cache_key for conversation caching (routes to same server).
+	// prompt_cache_key pins the conversation to one server so the cache hits.
 	if (sessionId && !next.prompt_cache_key) {
 		next.prompt_cache_key = sessionId;
 	}

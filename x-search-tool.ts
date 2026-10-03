@@ -15,8 +15,6 @@ import { Type } from "typebox";
 import { CLI_PROXY_BASE_URL, applyDiscoveredModels, buildProxyHeaders, resolveModels } from "./models.js";
 import { readBoundedJson, readBoundedText, safeFetch } from "./safe-fetch.js";
 
-// ─── Config ──────────────────────────────────────────────────────────────────
-
 /** Used when the catalog has no plain `grok-4.N` entry. */
 const SEARCH_MODEL_FALLBACK = "grok-4.7";
 
@@ -43,8 +41,6 @@ const SEARCH_MAX_RESPONSE_BYTES = 256 * 1024;
  * latency is 30-60s for simple queries under normal load; complex queries or
  * periods of heavy load on the proxy take longer, so this leaves headroom. */
 const SEARCH_TIMEOUT_MS = 120_000;
-
-// ─── Types ───────────────────────────────────────────────────────────────────
 
 interface XSearchResult {
 	answer: string;
@@ -75,8 +71,6 @@ export class XSearchHttpError extends Error {
 		this.name = "XSearchHttpError";
 	}
 }
-
-// ─── API call ────────────────────────────────────────────────────────────────
 
 export async function callXSearch(
 	apiKey: string,
@@ -130,7 +124,6 @@ export async function callXSearch(
 		citations?: Array<{ url: string; title?: string }>;
 	};
 
-	// Extract text from the Responses API output
 	const textParts: string[] = [];
 	for (const item of data.output ?? []) {
 		if (item.type === "message" && Array.isArray(item.content)) {
@@ -152,8 +145,6 @@ export async function callXSearch(
 		citations: citations.length > 0 ? citations : undefined,
 	};
 }
-
-// ─── Tool registration ───────────────────────────────────────────────────────
 
 export function registerXSearchTool(pi: ExtensionAPI) {
 	pi.registerTool({

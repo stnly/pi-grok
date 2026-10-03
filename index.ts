@@ -77,8 +77,7 @@ type StreamOpenAIResponses = (
 function piAiMajorMinor(): [number, number] {
 	// `package.json` is not in the exports map, so require() of that subpath
 	// throws ERR_PACKAGE_PATH_NOT_EXPORTED and the extension fails to load.
-	// Resolve the package entry, which is exported, and read the manifest next
-	// to its dist directory from disk.
+	// The package entry is exported; the manifest sits next to its dist directory.
 	const entry = fileURLToPath(import.meta.resolve("@earendil-works/pi-ai"));
 	const { version } = JSON.parse(readFileSync(join(dirname(entry), "..", "package.json"), "utf8")) as {
 		version: string;
@@ -109,8 +108,6 @@ async function loadStreamOpenAIResponses(): Promise<StreamOpenAIResponses> {
 }
 
 const streamSimpleOpenAIResponses = await loadStreamOpenAIResponses();
-
-// ─── Stream function ─────────────────────────────────────────────────────────
 
 function streamGrok(
 	model: Model<Api>,
@@ -152,8 +149,6 @@ function formatProxyError(err: unknown, prefix: string): string {
 	const msg = err instanceof Error ? err.message : String(err);
 	return `${prefix}: ${msg}`;
 }
-
-// ─── Extension entry point ───────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
 	const baseUrl = getBaseUrl();
@@ -203,7 +198,6 @@ export default function (pi: ExtensionAPI) {
 		},
 	};
 
-	// ── Register provider ─────────────────────────────────────────────────
 	const toProviderModels = (list: XaiModelConfig[]) => list.map((m) => ({
 		id: m.id,
 		name: m.name,
@@ -264,7 +258,6 @@ export default function (pi: ExtensionAPI) {
 		});
 	});
 
-	// ── Payload sanitization via event ────────────────────────────────────
 	pi.on("before_provider_request", (event, ctx) => {
 		if (ctx.model?.provider !== "xai-oauth") return;
 
@@ -273,19 +266,15 @@ export default function (pi: ExtensionAPI) {
 		return sanitizePayload(event.payload as Record<string, unknown>, modelId, sessionId, ctx.model?.reasoning ?? false);
 	});
 
-	// ── X Search tool ─────────────────────────────────────────────────────
 	if ((process.env.PI_XAI_X_SEARCH ?? "true").toLowerCase() !== "false") {
 		registerXSearchTool(pi);
 	}
 
-	// ── /xai-status command ───────────────────────────────────────────────
 	pi.registerCommand("xai-status", {
 		description: "Show xAI Grok account, privacy, and model status",
 		handler: async (_args, ctx) => {
 			const grokModels = ctx.modelRegistry.getAll().filter((m: Model<Api>) => m.provider === "xai-oauth");
 
-			// Resolve the live access token. Handles both the OAuth path and the
-			// XAI_OAUTH_TOKEN env bypass; missing token means not logged in.
 			let token: string | undefined;
 			try {
 				token = await ctx.modelRegistry.getApiKeyForProvider("xai-oauth");
@@ -322,7 +311,6 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	// ── /xai-privacy command ──────────────────────────────────────────────
 	pi.registerCommand("xai-privacy", {
 		description: "Show or set xAI coding data retention (privacy mode)",
 		handler: async (args, ctx) => {
@@ -389,7 +377,6 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	// ── /xai-usage command ────────────────────────────────────────────────
 	pi.registerCommand("xai-usage", {
 		description: "Show xAI subscription credit usage",
 		handler: async (_args, ctx) => {
@@ -419,7 +406,6 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	// ── Warn on env bypass ────────────────────────────────────────────────
 	if (process.env.XAI_OAUTH_TOKEN) {
 		pi.on("session_start", async (_event, ctx) => {
 			ctx.ui.notify(
