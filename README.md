@@ -62,14 +62,9 @@ Choose **Use a subscription**, select **xAI (SuperGrok Subscription)**. A verifi
 ## Models
 
 - **grok-4.7**
+- **grok-4.7-build-fast**
 - **grok-4.6**
 - **grok-4.5**
-- **grok-4.3**
-- **grok-composer-2.5-fast**
-- **grok-build**
-- **grok-4.20-0309-reasoning**
-- **grok-4.20-0309-non-reasoning**
-- **grok-4.20-multi-agent-0309**
 
 On login, pi-grok sends every OAuth model through the CLI chat proxy
 (`cli-chat-proxy.grok.com/v1`). The proxy maps each model to its subscription
@@ -85,7 +80,7 @@ drive routing. The merge reads the proxy field names (`context_window`,
 `context_windows`, `name`, `supports_reasoning_effort`) and still accepts the
 OpenAI names (`context_length`, `max_output_tokens`) if they appear. When the
 proxy sends `context_windows`, the registered window is the largest entry.
-grok-4.5, grok-4.6, and grok-4.7 advertise a 256k default and a 500k extended
+grok-4.5, grok-4.6, grok-4.7, and grok-4.7-build-fast advertise a 256k default and a 500k extended
 window, so they register at 500k. Until that fetch succeeds, the picker shows
 the built-in list. The on-disk catalog is read in the background and is not
 applied on its own. A successful fetch re-registers the provider so the picker
@@ -103,7 +98,7 @@ Filter or reorder with `PI_XAI_OAUTH_MODELS`. The filter is re-applied after
 live discovery, so it still holds when new catalog ids arrive:
 
 ```bash
-export PI_XAI_OAUTH_MODELS="grok-build,grok-4.5"
+export PI_XAI_OAUTH_MODELS="grok-4.7,grok-4.5"
 ```
 
 ## How it works
@@ -208,10 +203,10 @@ Enabled by default. Disable with:
 export PI_XAI_X_SEARCH=false
 ```
 
-The model used for the internal search call is the highest plain `grok-M.N` in the live catalog, compared by major then minor (`grok-4.7` today, and `grok-5.0` once the proxy lists it). Dated ids such as `grok-4.20-0309-reasoning` are not candidates. When the catalog has no such id, the call uses `grok-4.7`. Pin a model with:
+The model used for the internal search call is the highest plain `grok-M.N` in the live catalog, compared by major then minor (`grok-4.7` today, and `grok-5.0` once the proxy lists it). Variant ids such as `grok-4.7-build-fast` are not candidates. When the catalog has no such id, the call uses `grok-4.7`. Pin a model with:
 
 ```bash
-export PI_XAI_X_SEARCH_MODEL=grok-4.20-0309-reasoning
+export PI_XAI_X_SEARCH_MODEL=grok-4.6
 ```
 
 ## Architecture

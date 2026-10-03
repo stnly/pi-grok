@@ -16,22 +16,34 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
 
-// From the xAI public pricing page. The cost shape is flat, so the base tier
-// is used; long-context (>=200k prompt) pricing is not modeled. cacheWrite is
-// not published for these models, so it stays 0.
-const COST_BUILD = { input: 1, output: 2, cacheRead: 0.2, cacheWrite: 0 };
-const COST_43 = { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 };
-const COST_420 = { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 };
-// grok-4.5 / 4.6 / 4.7: cached input is $0.50/M (higher than the $0.20 used by
-// 4.20/4.3). grok-4.6 and grok-4.7 shipped at the same per-token price as grok-4.5.
-export const COST_45 = { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 };
+// From the xAI pricing page. The base rate covers prompts under 200k tokens.
+// A prompt that reaches 200k is billed at the higher rate for every token in
+// the request, which is what pi's cost tiers do: the highest matching
+// `inputTokensAbove` applies to the whole request. cacheWrite is not
+// published for these models, so it stays 0.
+type ModelCostTier = { inputTokensAbove: number; input: number; output: number; cacheRead: number; cacheWrite: number };
+type ModelCost = { input: number; output: number; cacheRead: number; cacheWrite: number; tiers?: ModelCostTier[] };
+
+const LONG_CONTEXT = 200_000;
+const tier = (input: number, output: number, cacheRead: number): ModelCostTier =>
+	({ inputTokensAbove: LONG_CONTEXT, input, output, cacheRead, cacheWrite: 0 });
+
+// grok-4.6 and grok-4.7 are the same rate today. grok-4.5 costs the same per
+// token but caches cheaper: $0.30 below 200k and $0.60 above, against $0.50
+// and $1.00. Each model keeps its own constant so a price change touches one.
+export const COST_GROK_4_5: ModelCost = { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0, tiers: [tier(4, 12, 0.6)] };
+export const COST_GROK_4_6: ModelCost = { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0, tiers: [tier(4, 12, 1)] };
+export const COST_GROK_4_7: ModelCost = { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0, tiers: [tier(4, 12, 1)] };
+// A discovered id the proxy adds before this list knows it. grok-4.7 is the
+// current top model, so its rate is the closest guess.
+const COST_UNKNOWN: ModelCost = COST_GROK_4_7;
 
 export interface XaiModelConfig {
 	id: string;
 	name: string;
 	reasoning: boolean;
 	input: ("text" | "image")[];
-	cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+	cost: ModelCost;
 	contextWindow: number;
 	maxTokens: number;
 	/** Per-level overrides for the host's thinking-level picker. */
@@ -103,32 +115,12 @@ export function buildProxyHeaders(modelId?: string): Record<string, string> {
 
 export const FALLBACK_MODELS: XaiModelConfig[] = [
 	{
-		id: "grok-composer-2.5-fast",
-		name: "Composer 2.5",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: COST_BUILD,
-		contextWindow: 200_000,
-		maxTokens: 30_000,
-	},
-	{
-		id: "grok-build",
-		name: "Grok Build",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: COST_BUILD,
-		contextWindow: 500_000,
-		maxTokens: 30_000,
-	},
-	{
 		id: "grok-4.6",
 		name: "Grok 4.6",
 		reasoning: true,
 		input: ["text", "image"],
-		// grok-4.6 is priced the same as grok-4.5; context_window mirrors the
-		// cli-chat-proxy /models entry. The proxy does not publish
-		// max_output_tokens, so 128k mirrors grok-4.5.
-		cost: COST_45,
+		// The proxy does not publish max_output_tokens, so 128k stands in.
+		cost: COST_GROK_4_6,
 		contextWindow: 500_000,
 		maxTokens: 131_072,
 	},
@@ -137,10 +129,8 @@ export const FALLBACK_MODELS: XaiModelConfig[] = [
 		name: "Grok 4.7",
 		reasoning: true,
 		input: ["text", "image"],
-		// grok-4.7 is priced the same as grok-4.5; context_window mirrors the
-		// cli-chat-proxy /models entry. The proxy does not publish
-		// max_output_tokens, so 128k mirrors grok-4.5.
-		cost: COST_45,
+		// The proxy does not publish max_output_tokens, so 128k stands in.
+		cost: COST_GROK_4_7,
 		contextWindow: 500_000,
 		maxTokens: 131_072,
 	},
@@ -149,44 +139,8 @@ export const FALLBACK_MODELS: XaiModelConfig[] = [
 		name: "Grok 4.5",
 		reasoning: true,
 		input: ["text", "image"],
-		cost: COST_45,
+		cost: COST_GROK_4_5,
 		contextWindow: 500_000,
-		maxTokens: 131_072,
-	},
-	{
-		id: "grok-4.3",
-		name: "Grok 4.3",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: COST_43,
-		contextWindow: 1_000_000,
-		maxTokens: 131_072,
-	},
-	{
-		id: "grok-4.20-0309-reasoning",
-		name: "Grok 4.20 Reasoning",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: COST_420,
-		contextWindow: 2_000_000,
-		maxTokens: 131_072,
-	},
-	{
-		id: "grok-4.20-0309-non-reasoning",
-		name: "Grok 4.20 Non-Reasoning",
-		reasoning: false,
-		input: ["text", "image"],
-		cost: COST_420,
-		contextWindow: 2_000_000,
-		maxTokens: 131_072,
-	},
-	{
-		id: "grok-4.20-multi-agent-0309",
-		name: "Grok 4.20 Multi-Agent",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: COST_420,
-		contextWindow: 2_000_000,
 		maxTokens: 131_072,
 	},
 ];
@@ -195,7 +149,7 @@ export const FALLBACK_MODELS: XaiModelConfig[] = [
  * Only these model prefixes support `reasoning.effort` in the Responses API.
  * Everything else gets the param stripped in the sanitizer.
  */
-const EFFORT_CAPABLE_PREFIXES = ["grok-3-mini", "grok-4.20-multi-agent", "grok-4.3", "grok-4.5", "grok-4.6", "grok-4.7"];
+const EFFORT_CAPABLE_PREFIXES = ["grok-4.5", "grok-4.6", "grok-4.7"];
 
 export function supportsReasoningEffort(modelId: string): boolean {
 	const name = modelId.includes("/") ? modelId.split("/").pop()! : modelId;
@@ -242,7 +196,7 @@ export function filterModelsByEnv(models: XaiModelConfig[], envIds: string[]): X
 			name: id,
 			reasoning: true,
 			input: ["text"] as ("text" | "image")[],
-			cost: COST_BUILD,
+			cost: COST_UNKNOWN,
 			contextWindow: 1_000_000,
 			maxTokens: 30_000,
 			baseUrl: undefined,
@@ -303,12 +257,10 @@ function liveThinkingMap(
 }
 
 /** Cost overrides for known model families (the live API doesn't expose pricing). */
-const COST_OVERRIDES: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
-	"grok-build": COST_BUILD,
-	"grok-4.3": COST_43,
-	"grok-4.5": COST_45,
-	"grok-4.6": COST_45,
-	"grok-4.7": COST_45,
+const COST_OVERRIDES: Record<string, ModelCost> = {
+	"grok-4.5": COST_GROK_4_5,
+	"grok-4.6": COST_GROK_4_6,
+	"grok-4.7": COST_GROK_4_7,
 };
 
 /**
@@ -380,7 +332,7 @@ export function mergeLiveModels(
 				name: entry.name ?? entry.id,
 				reasoning,
 				input: ["text", "image"],
-				cost: COST_OVERRIDES[entry.id] ?? COST_420,
+				cost: COST_OVERRIDES[entry.id] ?? COST_UNKNOWN,
 				contextWindow: liveContextWindow(entry) ?? 1_000_000,
 				maxTokens: entry.max_output_tokens ?? 30_000,
 				...(thinkingLevelMap ? { thinkingLevelMap } : {}),

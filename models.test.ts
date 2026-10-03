@@ -7,7 +7,8 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-	COST_45,
+	COST_GROK_4_6,
+	COST_GROK_4_7,
 	FALLBACK_MODELS,
 	CLI_PROXY_BASE_URL as CLI_PROXY_URL,
 	buildProxyHeaders,
@@ -43,10 +44,9 @@ describe("FALLBACK_MODELS", () => {
 		expect(m?.name).toBe("Grok 4.6");
 		expect(m?.reasoning).toBe(true);
 		expect(m?.input).toEqual(["text", "image"]);
-		// cli-chat-proxy /models reports context_window 500000; grok-4.6 is
-		// priced the same as grok-4.5.
+		// cli-chat-proxy /models reports context_window 500000.
 		expect(m?.contextWindow).toBe(500_000);
-		expect(m?.cost).toEqual(COST_45);
+		expect(m?.cost).toEqual(COST_GROK_4_6);
 	});
 
 	it("includes grok-4.7", () => {
@@ -55,18 +55,9 @@ describe("FALLBACK_MODELS", () => {
 		expect(m?.name).toBe("Grok 4.7");
 		expect(m?.reasoning).toBe(true);
 		expect(m?.input).toEqual(["text", "image"]);
-		// cli-chat-proxy /models reports context_window 500000; grok-4.7 is
-		// priced the same as grok-4.5.
+		// cli-chat-proxy /models reports context_window 500000.
 		expect(m?.contextWindow).toBe(500_000);
-		expect(m?.cost).toEqual(COST_45);
-	});
-
-	it("grok-build matches the official context window (500k)", () => {
-		const m = FALLBACK_MODELS.find((x) => x.id === "grok-build");
-		expect(m).toBeDefined();
-		// grok-build's default_models.json ships context_window 500000; a larger
-		// value skews pi's usage bar and auto-compaction.
-		expect(m?.contextWindow).toBe(500_000);
+		expect(m?.cost).toEqual(COST_GROK_4_7);
 	});
 
 	it("grok-4.5 carries the observed max output tokens (128k)", () => {
@@ -135,26 +126,28 @@ describe("buildProxyHeaders", () => {
 	});
 });
 
-describe("COST_45", () => {
-	it("matches xAI public API pricing ($/M tokens)", () => {
-		expect(COST_45.input).toBe(2);
-		expect(COST_45.output).toBe(6);
-		// Cached input is $0.50/M, not the $0.20 used by older models.
-		expect(COST_45.cacheRead).toBe(0.5);
-		expect(COST_45.cacheWrite).toBe(0);
+describe("COST_GROK_4_6", () => {
+	it("matches the grok-4.6 rate, with the long-context tier", () => {
+		expect(COST_GROK_4_6.input).toBe(2);
+		expect(COST_GROK_4_6.output).toBe(6);
+		expect(COST_GROK_4_6.cacheRead).toBe(0.5);
+		expect(COST_GROK_4_6.cacheWrite).toBe(0);
+		// A prompt at or above 200k tokens is billed at double for the whole request.
+		expect(COST_GROK_4_6.tiers).toEqual([
+			{ inputTokensAbove: 200_000, input: 4, output: 12, cacheRead: 1, cacheWrite: 0 },
+		]);
 	});
 });
 
 describe("FALLBACK_MODELS pricing", () => {
-	it("grok-build matches the public pricing page (base tier)", () => {
-		const m = FALLBACK_MODELS.find((x) => x.id === "grok-build");
-		expect(m?.cost).toEqual({ input: 1, output: 2, cacheRead: 0.2, cacheWrite: 0 });
-	});
-
-	it("grok-4.20 models match the public pricing page (base tier)", () => {
-		for (const id of ["grok-4.20-0309-reasoning", "grok-4.20-0309-non-reasoning", "grok-4.20-multi-agent-0309"]) {
+	it("grok-4.5 caches cheaper than grok-4.6 and grok-4.7", () => {
+		const g45 = FALLBACK_MODELS.find((x) => x.id === "grok-4.5");
+		expect(g45?.cost.cacheRead).toBe(0.3);
+		expect(g45?.cost.tiers?.[0].cacheRead).toBe(0.6);
+		for (const id of ["grok-4.6", "grok-4.7"]) {
 			const m = FALLBACK_MODELS.find((x) => x.id === id);
-			expect(m?.cost).toEqual({ input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 });
+			expect(m?.cost.cacheRead).toBe(0.5);
+			expect(m?.cost.tiers?.[0].cacheRead).toBe(1);
 		}
 	});
 });
@@ -178,7 +171,7 @@ describe("supportsReasoningEffort", () => {
 	});
 
 	it("returns false for a model outside the allowlist", () => {
-		expect(supportsReasoningEffort("grok-4.20-0309-non-reasoning")).toBe(false);
+		expect(supportsReasoningEffort("grok-imagine-image")).toBe(false);
 	});
 });
 
@@ -192,17 +185,15 @@ describe("thinkingLevelMapFor", () => {
 	});
 
 	it("honors a provider-qualified id", () => {
-		expect(thinkingLevelMapFor("xai-oauth/grok-4.3", true)).toEqual({ off: null, minimal: null, xhigh: "xhigh" });
+		expect(thinkingLevelMapFor("xai-oauth/grok-4.7", true)).toEqual({ off: null, minimal: null, xhigh: "xhigh" });
 	});
 
-	it("returns undefined for a non-effort reasoning model", () => {
-		// grok-build is not effort-capable, so it gets no picker regardless of
-		// the reasoning flag; nothing to map.
-		expect(thinkingLevelMapFor("grok-build", true)).toBeUndefined();
+	it("returns undefined for a model outside the allowlist", () => {
+		expect(thinkingLevelMapFor("grok-imagine-image", true)).toBeUndefined();
 	});
 
 	it("returns undefined for a non-reasoning model", () => {
-		expect(thinkingLevelMapFor("grok-4.20-0309-non-reasoning", false)).toBeUndefined();
+		expect(thinkingLevelMapFor("grok-4.7", false)).toBeUndefined();
 	});
 });
 
@@ -212,8 +203,8 @@ describe("filterModelsByEnv", () => {
 	});
 
 	it("filters and reorders by the env id list", () => {
-		const filtered = filterModelsByEnv(FALLBACK_MODELS, ["grok-4.5", "grok-build"]);
-		expect(filtered.map((m) => m.id)).toEqual(["grok-4.5", "grok-build"]);
+		const filtered = filterModelsByEnv(FALLBACK_MODELS, ["grok-4.5", "grok-4.7"]);
+		expect(filtered.map((m) => m.id)).toEqual(["grok-4.5", "grok-4.7"]);
 	});
 
 	it("synthesizes a default entry for unknown env ids", () => {
@@ -308,9 +299,11 @@ describe("mergeLiveModels", () => {
 		const m = merged.find((x) => x.id === "grok-4.5")!;
 		expect(m.contextWindow).toBe(999);
 		expect(m.maxTokens).toBe(999);
-		// Base still supplies fields the API does not expose.
+		// Base still supplies fields the API does not expose. grok-4.5 caches
+		// cheaper than the grok-4.6 / grok-4.7 rate.
 		expect(m.name).toBe("Grok 4.5");
-		expect(m.cost).toEqual(COST_45);
+		expect(m.cost.cacheRead).toBe(0.3);
+		expect(m.cost.tiers?.[0].cacheRead).toBe(0.6);
 	});
 
 	it("does not set routing: merge is enrichment only", () => {
@@ -372,10 +365,10 @@ describe("applyDiscoveredModels + env filter", () => {
 				{ id: "grok-9-future", context_length: 2_000_000 },
 			],
 		};
-		const base = FALLBACK_MODELS.filter((m) => m.id === "grok-build");
+		const base = FALLBACK_MODELS.filter((m) => m.id === "grok-4.7");
 		const merged = mergeLiveModels(base, body);
-		const filtered = filterModelsByEnv(merged, ["grok-build"]);
-		expect(filtered.map((m) => m.id)).toEqual(["grok-build"]);
+		const filtered = filterModelsByEnv(merged, ["grok-4.7"]);
+		expect(filtered.map((m) => m.id)).toEqual(["grok-4.7"]);
 		expect(filtered.some((m) => m.id === "grok-9-future")).toBe(false);
 	});
 
@@ -484,18 +477,14 @@ describe("rebuildModelsForOAuth", () => {
 		expect(found.thinkingLevelMap).toEqual({ off: null, minimal: null, xhigh: "xhigh" });
 	});
 
-	it("does not stamp a thinkingLevelMap on the non-reasoning model", () => {
-		const result = rebuildModelsForOAuth(
-			[...ours] as Array<Record<string, unknown>>,
+	it("does not stamp a thinkingLevelMap on a non-reasoning model", () => {
+		const rebuilt = rebuildModelsForOAuth(
+			[{ id: "grok-4.7", reasoning: false }] as Array<Record<string, unknown>>,
 			"xai-oauth",
 		);
-		const nonReasoning = result.find(
-			(m) => (m as any).id === "grok-4.20-0309-non-reasoning",
-		) as any;
-		// The non-reasoning model is reasoning: false; getSupportedThinkingLevels
-		// short-circuits to off-only without consulting a map, so none is stamped.
-		expect(nonReasoning.thinkingLevelMap).toBeUndefined();
-		expect(nonReasoning.reasoning).toBe(false);
+		// reasoning: false short-circuits to off-only without consulting a map.
+		expect((rebuilt[0] as any).thinkingLevelMap).toBeUndefined();
+		expect((rebuilt[0] as any).reasoning).toBe(false);
 	});
 
 	it("preserves non-provider models untouched", () => {
@@ -513,9 +502,9 @@ describe("rebuildModelsForOAuth", () => {
 		const result = rebuildModelsForOAuth(
 			ours as Array<Record<string, unknown>>,
 			"xai-oauth",
-			["grok-build", "grok-4.5"],
+			["grok-4.7", "grok-4.5"],
 		);
-		expect(result.map((m) => (m as any).id)).toEqual(["grok-build", "grok-4.5"]);
+		expect(result.map((m) => (m as any).id)).toEqual(["grok-4.7", "grok-4.5"]);
 	});
 });
 
