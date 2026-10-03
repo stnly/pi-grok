@@ -17,6 +17,7 @@ import {
 	supportsReasoningEffort,
 	thinkingLevelMapFor,
 	triggerDiscovery,
+	refreshCatalogNow,
 	onCatalogUpdated,
 	_setCatalogCachePathForTests,
 	_setDiscoveryRetryDelaysForTests,
@@ -533,6 +534,16 @@ describe("discovery cache", () => {
 	it("returns the base list unchanged before any fetch completes", () => {
 		const before = mergeDiscoveredModels(FALLBACK_MODELS);
 		expect(before).toEqual(FALLBACK_MODELS);
+	});
+
+	it("refreshCatalogNow merges a live catalog and ignores the discovery TTL", async () => {
+		const first = await refreshCatalogNow("token");
+		expect(first.find((m) => m.id === "grok-9-future")?.contextWindow).toBe(2_000_000);
+		expect(discoveryStatus().state).toBe("warm");
+		const callsBefore = (globalThis.fetch as unknown as { mock: { calls: unknown[] } }).mock.calls.length;
+		const second = await refreshCatalogNow("token");
+		expect(second.find((m) => m.id === "grok-9-future")).toBeDefined();
+		expect((globalThis.fetch as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBe(callsBefore + 1);
 	});
 
 	it("reports cold state before any fetch and warm after", async () => {

@@ -436,6 +436,7 @@ function isRetryableStatus(status: number): boolean {
 async function fetchLiveCatalog(
 	accessToken: string,
 	baseUrl: string,
+	signal?: AbortSignal,
 ): Promise<CatalogFetchResult> {
 	try {
 		const response = await safeFetch(`${baseUrl}/models`, {
@@ -443,7 +444,9 @@ async function fetchLiveCatalog(
 				Authorization: `Bearer ${accessToken}`,
 				...buildProxyHeaders(),
 			},
-			signal: AbortSignal.timeout(10_000),
+			signal: signal
+				? AbortSignal.any([AbortSignal.timeout(10_000), signal])
+				: AbortSignal.timeout(10_000),
 		});
 		if (!response.ok) {
 			return {
@@ -526,6 +529,31 @@ export function applyDiscoveredModels(
 	envIds: string[] = envModelIds(),
 ): XaiModelConfig[] {
 	return filterModelsByEnv(mergeDiscoveredModels(providerModels), envIds);
+}
+
+/**
+ * Fetch `/models` once and return the merged list. Used by the provider
+ * `refreshModels` hook, which `/model` awaits before redrawing the picker.
+ * Unlike `triggerDiscovery`, this does not skip a fresh cache and does not
+ * retry: the picker has its own timeout, and the returned list is what it
+ * publishes. A failed fetch leaves the previous catalog in place.
+ */
+export async function refreshCatalogNow(
+	accessToken: string,
+	signal?: AbortSignal,
+): Promise<XaiModelConfig[]> {
+	if (signal?.aborted) return applyDiscoveredModels(resolveModels());
+	const result = await fetchLiveCatalog(accessToken, CLI_PROXY_BASE_URL, signal);
+	if (result.ok && Array.isArray(result.body.data) && result.body.data.length > 0) {
+		discoveredBody = result.body;
+		discoveryLastError = null;
+		discoveryFetchedAt = Date.now();
+		discoveryLastToken = accessToken;
+		void writeCachedCatalog(catalogCachePath, result.body, discoveryFetchedAt);
+	} else if (!result.ok) {
+		discoveryLastError = result.error;
+	}
+	return applyDiscoveredModels(resolveModels());
 }
 
 /**

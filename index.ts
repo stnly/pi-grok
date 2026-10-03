@@ -15,6 +15,7 @@ import {
 	type Model,
 	type OAuthCredentials,
 	type OAuthLoginCallbacks,
+	type RefreshModelsContext,
 	type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import { readFileSync } from "node:fs";
@@ -28,6 +29,7 @@ import {
 	applyDiscoveredModels,
 	thinkingLevelMapFor,
 	triggerDiscovery,
+	refreshCatalogNow,
 	discoveryStatus,
 	onCatalogUpdated,
 	CLI_PROXY_BASE_URL,
@@ -195,28 +197,43 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	// ── Register provider ─────────────────────────────────────────────────
+	const toProviderModels = (list: XaiModelConfig[]) => list.map((m) => ({
+		id: m.id,
+		name: m.name,
+		reasoning: m.reasoning,
+		thinkingLevelMap: m.thinkingLevelMap ?? thinkingLevelMapFor(m.id, m.reasoning),
+		input: m.input,
+		cost: m.cost,
+		contextWindow: m.contextWindow,
+		maxTokens: m.maxTokens,
+		// Stamp proxy routing at registration so the XAI_OAUTH_TOKEN env
+		// bypass (which skips modifyModels) rides the proxy too. The OAuth
+		// path re-stamps this in rebuildModelsForOAuth, including discovered
+		// ids the registration map never saw.
+		baseUrl: CLI_PROXY_BASE_URL,
+		headers: buildProxyHeaders(m.id),
+	}));
+
+	// `/model` calls modelRuntime.refresh(), which awaits this and publishes
+	// the returned list before the picker redraws. Fetch even inside the
+	// discovery TTL; opening the picker is an explicit refresh.
+	const refreshModels = async (context: RefreshModelsContext) => {
+		if (!context.allowNetwork || context.signal.aborted) return toProviderModels(applyDiscoveredModels(resolveModels()));
+		const token = context.credential?.type === "oauth"
+			? context.credential.access
+			: process.env.XAI_OAUTH_TOKEN;
+		if (!token) return toProviderModels(applyDiscoveredModels(resolveModels()));
+		return toProviderModels(await refreshCatalogNow(token, context.signal));
+	};
+
 	pi.registerProvider("xai-oauth", {
 		name: "xAI (SuperGrok Subscription)",
 		baseUrl,
 		apiKey: "$XAI_OAUTH_TOKEN",
 		api: "openai-responses",
-		models: models.map((m: XaiModelConfig) => ({
-			id: m.id,
-			name: m.name,
-			reasoning: m.reasoning,
-			thinkingLevelMap: m.thinkingLevelMap ?? thinkingLevelMapFor(m.id, m.reasoning),
-			input: m.input,
-			cost: m.cost,
-			contextWindow: m.contextWindow,
-			maxTokens: m.maxTokens,
-			// Stamp proxy routing at registration so the XAI_OAUTH_TOKEN env
-			// bypass (which skips modifyModels) rides the proxy too. The OAuth
-			// path re-stamps this in rebuildModelsForOAuth, including discovered
-			// ids the registration map never saw.
-			baseUrl: CLI_PROXY_BASE_URL,
-			headers: buildProxyHeaders(m.id),
-		})),
+		models: toProviderModels(models),
 		oauth: oauthConfig,
+		refreshModels,
 
 		streamSimple: streamGrok,
 	});
@@ -233,19 +250,9 @@ export default function (pi: ExtensionAPI) {
 			baseUrl,
 			apiKey: "$XAI_OAUTH_TOKEN",
 			api: "openai-responses",
-			models: next.map((m: XaiModelConfig) => ({
-				id: m.id,
-				name: m.name,
-				reasoning: m.reasoning,
-				thinkingLevelMap: m.thinkingLevelMap ?? thinkingLevelMapFor(m.id, m.reasoning),
-				input: m.input,
-				cost: m.cost,
-				contextWindow: m.contextWindow,
-				maxTokens: m.maxTokens,
-				baseUrl: CLI_PROXY_BASE_URL,
-				headers: buildProxyHeaders(m.id),
-			})),
+			models: toProviderModels(next),
 			oauth: oauthConfig,
+			refreshModels,
 			streamSimple: streamGrok,
 		});
 	});
