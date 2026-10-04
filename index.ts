@@ -227,35 +227,31 @@ export default function (pi: ExtensionAPI) {
 		return toProviderModels(await refreshCatalogNow(token, context.signal));
 	};
 
-	pi.registerProvider("xai-oauth", {
-		name: "xAI (SuperGrok Subscription)",
-		baseUrl,
-		apiKey: "$XAI_OAUTH_TOKEN",
-		api: "openai-responses",
-		models: toProviderModels(models),
-		oauth: oauthConfig,
-		refreshModels,
-
-		streamSimple: streamGrok,
-	});
-
-	// When a live /models fetch lands, re-register this provider so the
-	// picker picks up new ids and live context windows without a second
-	// open. registerProvider after load takes effect immediately and
-	// re-runs modifyModels, which calls triggerDiscovery again; that
-	// call is a no-op (in-flight or still inside the fresh TTL).
-	onCatalogUpdated(() => {
-		const next = applyDiscoveredModels(resolveModels());
+	// The provider config is registered twice: once at load, and again whenever a
+	// live catalog fetch lands so the picker picks up new ids and context windows
+	// without a second open. Both sites go through this helper so the two can
+	// never drift — the re-registration is what a running session actually runs
+	// with, so a field added to only one of them would silently disappear.
+	const registerXaiProvider = (list: XaiModelConfig[]) => {
 		pi.registerProvider("xai-oauth", {
 			name: "xAI (SuperGrok Subscription)",
 			baseUrl,
 			apiKey: "$XAI_OAUTH_TOKEN",
 			api: "openai-responses",
-			models: toProviderModels(next),
+			models: toProviderModels(list),
 			oauth: oauthConfig,
 			refreshModels,
 			streamSimple: streamGrok,
 		});
+	};
+
+	registerXaiProvider(models);
+
+	// Re-register on catalog updates. registerProvider after load takes effect
+	// immediately and re-runs modifyModels, which calls triggerDiscovery again;
+	// that call is a no-op (in-flight or still inside the fresh TTL).
+	onCatalogUpdated(() => {
+		registerXaiProvider(applyDiscoveredModels(resolveModels()));
 	});
 
 	pi.on("before_provider_request", (event, ctx) => {
