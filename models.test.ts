@@ -28,6 +28,20 @@ import {
 	_setDiscoveryRetryDelaysForTests,
 } from "./models.js";
 
+// `resolveClientVersion` prefers the PI_XAI_CLIENT_VERSION override, which the
+// README tells users to export. Pin it off for the suite so the header and
+// version assertions do not depend on the developer's shell: with it set, the
+// "cached after the first call" case sees the override instead of the cache.
+// client-version.test.ts owns the override's own behaviour.
+const versionOverride = process.env.PI_XAI_CLIENT_VERSION;
+beforeEach(() => {
+	delete process.env.PI_XAI_CLIENT_VERSION;
+});
+afterEach(() => {
+	if (versionOverride === undefined) delete process.env.PI_XAI_CLIENT_VERSION;
+	else process.env.PI_XAI_CLIENT_VERSION = versionOverride;
+});
+
 describe("FALLBACK_MODELS", () => {
 	it("includes grok-4.5", () => {
 		const m = FALLBACK_MODELS.find((x) => x.id === "grok-4.5");

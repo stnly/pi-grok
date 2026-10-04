@@ -5,7 +5,6 @@ import {
 	formatUsageBlock,
 	parseUsageBody,
 	parseUserId,
-	type XaiUsageSnapshot,
 } from "./usage.js";
 import { CLI_PROXY_BASE_URL } from "./models.js";
 
