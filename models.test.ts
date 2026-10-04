@@ -175,6 +175,64 @@ describe("supportsReasoningEffort", () => {
 	});
 });
 
+describe("supportsReasoningEffort with a live catalog", () => {
+	const originalFetch = globalThis.fetch;
+
+	function stubCatalog(data: Array<Record<string, unknown>>): void {
+		globalThis.fetch = vi.fn(async () =>
+			new Response(JSON.stringify({ data }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
+		) as unknown as typeof fetch;
+	}
+
+	beforeEach(() => {
+		resetDiscoveryForTests();
+		_setCatalogCachePathForTests("");
+	});
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+		resetDiscoveryForTests();
+		vi.clearAllMocks();
+	});
+
+	it("switches effort on for an id the fallback list has never seen", async () => {
+		expect(supportsReasoningEffort("grok-4.8")).toBe(false);
+		stubCatalog([{ id: "grok-4.8", context_window: 500_000, supports_reasoning_effort: true }]);
+		await refreshCatalogNow("token");
+		expect(supportsReasoningEffort("grok-4.8")).toBe(true);
+		expect(supportsReasoningEffort("xai-oauth/grok-4.8")).toBe(true);
+		// Same authority feeds the picker, so thinking levels appear too.
+		expect(thinkingLevelMapFor("grok-4.8", true)).toEqual({ off: null, minimal: null, xhigh: "xhigh" });
+	});
+
+	it("honours an explicit false over the prefix list", async () => {
+		stubCatalog([{ id: "grok-4.5", context_window: 500_000, supports_reasoning_effort: false }]);
+		await refreshCatalogNow("token");
+		expect(supportsReasoningEffort("grok-4.5")).toBe(false);
+	});
+
+	it("keeps the prefix fallback when the catalog entry omits the flag", async () => {
+		stubCatalog([
+			{ id: "grok-4.7", context_window: 500_000 },
+			{ id: "grok-9-new", context_window: 200_000 },
+		]);
+		await refreshCatalogNow("token");
+		expect(supportsReasoningEffort("grok-4.7")).toBe(true);
+		expect(supportsReasoningEffort("grok-9-new")).toBe(false);
+	});
+
+	it("reverts to the prefix list once the discovery cache is cleared", async () => {
+		stubCatalog([{ id: "grok-4.8", supports_reasoning_effort: true }]);
+		await refreshCatalogNow("token");
+		expect(supportsReasoningEffort("grok-4.8")).toBe(true);
+		resetDiscoveryForTests();
+		expect(supportsReasoningEffort("grok-4.8")).toBe(false);
+	});
+});
+
 describe("thinkingLevelMapFor", () => {
 	it("exposes low/medium/high/xhigh for an effort-capable reasoning model", () => {
 		expect(thinkingLevelMapFor("grok-4.5", true)).toEqual({ off: null, minimal: null, xhigh: "xhigh" });

@@ -3,7 +3,9 @@
  *
  * xAI's endpoint has quirks compared to stock OpenAI:
  *   - Replayed `reasoning` items in input cause 400 errors.
- *   - `reasoning.effort` is only supported on a subset of models.
+ *   - `reasoning.effort` is only supported on a subset of models; the live
+ *     catalog's `supports_reasoning_effort` decides, with a prefix list as the
+ *     offline fallback.
  *   - Empty-string content items cause validation failures.
  *   - `function_call_output.output` cannot contain image arrays.
  *   - `image_url` parts must be normalized to `input_image` with data URIs.

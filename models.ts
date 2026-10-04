@@ -146,13 +146,28 @@ export const FALLBACK_MODELS: XaiModelConfig[] = [
 ];
 
 /**
- * Only these model prefixes support `reasoning.effort` in the Responses API.
- * Everything else gets the param stripped in the sanitizer.
+ * Offline fallback for `supportsReasoningEffort`: prefixes known to accept
+ * `reasoning.effort` in the Responses API. The live catalog flag wins whenever
+ * the proxy reports one (see {@link liveEffortFlag}), so this list only decides
+ * a model the catalog has nothing to say about — a cold start, an env-declared
+ * id, or a proxy that omits the field.
  */
 const EFFORT_CAPABLE_PREFIXES = ["grok-4.5", "grok-4.6", "grok-4.7"];
 
+/**
+ * Whether `modelId` accepts `reasoning.effort`.
+ *
+ * The sanitizer deletes the whole `reasoning` object when this returns false,
+ * so a false negative here silently turns off thinking for a model that
+ * supports it — a request that still succeeds, and only shows up as the model
+ * giving up mid-task. Deriving the answer from the id alone meant every new
+ * Grok release needed a code change in two places (this list and the fallback
+ * catalog); now the catalog the session already fetches decides it.
+ */
 export function supportsReasoningEffort(modelId: string): boolean {
 	const name = modelId.includes("/") ? modelId.split("/").pop()! : modelId;
+	const advertised = liveEffortFlag(name);
+	if (advertised !== undefined) return advertised;
 	return EFFORT_CAPABLE_PREFIXES.some((p) => name.toLowerCase().startsWith(p));
 }
 
@@ -242,6 +257,24 @@ function liveContextWindow(entry: ApiModelEntry): number | undefined {
 	);
 	if (advertised.length > 0) return Math.max(...advertised);
 	return entry.context_window ?? entry.context_length;
+}
+
+/**
+ * `supports_reasoning_effort` for `modelId` from the catalog body currently in
+ * effect, or `undefined` when that body says nothing about the id (cold
+ * discovery, an id the proxy does not list, or an older proxy without the
+ * field). Tri-state on purpose: an explicit `false` must override the prefix
+ * list just as an explicit `true` does.
+ */
+function liveEffortFlag(modelId: string): boolean | undefined {
+	const lower = modelId.toLowerCase();
+	for (const entry of discoveredBody?.data ?? []) {
+		if (typeof entry.id !== "string") continue;
+		if (entry.id.toLowerCase() === lower && typeof entry.supports_reasoning_effort === "boolean") {
+			return entry.supports_reasoning_effort;
+		}
+	}
+	return undefined;
 }
 
 /** Effort map from a live entry. The proxy flag wins over the prefix list so a
