@@ -8,19 +8,16 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import {
-	type Api,
-	type AssistantMessageEventStream,
-	type Context,
-	type Model,
-	type OAuthCredentials,
-	type OAuthLoginCallbacks,
-	type RefreshModelsContext,
-	type SimpleStreamOptions,
+import type {
+	Api,
+	AssistantMessageEventStream,
+	Context,
+	Model,
+	OAuthCredentials,
+	OAuthLoginCallbacks,
+	RefreshModelsContext,
+	SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import * as oauth from "./oauth.js";
 import { type XaiOAuthCredentials, getBaseUrl } from "./oauth.js";
 import {
@@ -46,67 +43,14 @@ import {
 } from "./account.js";
 import { runPrivacyPicker } from "./privacy.js";
 import { sanitizePayload } from "./sanitize.js";
+import { loadStreamOpenAIResponses } from "./streamer.js";
 import { XaiOAuthError } from "./errors.js";
 import { registerXSearchTool } from "./x-search-tool.js";
 import { fetchUsage, formatUsageBlock, XaiUsageError } from "./usage.js";
 
-/**
- * pi-ai 0.80 moved the OpenAI responses streamer. A static import of either
- * location fails to load the extension on hosts that only ship the other, so
- * read the installed version and import the one it exports:
- *
- * - pi-ai >=0.80 exports `streamSimple` from
- *   `@earendil-works/pi-ai/api/openai-responses`.
- * - pi-ai <=0.79 exports `streamSimpleOpenAIResponses` from
- *   `@earendil-works/pi-ai/openai-responses`.
- *
- * pi-ai is ESM-only, so `require` cannot load the module itself, and a static
- * `import()` of a subpath the installed types do not declare fails
- * typechecking. The specifier is chosen at runtime and imported with a real
- * `import()`, which jiti rewrites when it evaluates the extension. The
- * top-level await resolves before the extension factory runs. The version
- * comes from the manifest on disk, because `package.json` is not an exported
- * subpath.
- */
-type StreamOpenAIResponses = (
-	model: Model<"openai-responses">,
-	context: Context,
-	options?: SimpleStreamOptions,
-) => AssistantMessageEventStream;
-
-function piAiMajorMinor(): [number, number] {
-	// `package.json` is not in the exports map, so require() of that subpath
-	// throws ERR_PACKAGE_PATH_NOT_EXPORTED and the extension fails to load.
-	// The package entry is exported; the manifest sits next to its dist directory.
-	const entry = fileURLToPath(import.meta.resolve("@earendil-works/pi-ai"));
-	const { version } = JSON.parse(readFileSync(join(dirname(entry), "..", "package.json"), "utf8")) as {
-		version: string;
-	};
-	const [major = 0, minor = 0] = version.split(".").map(Number);
-	return [major, minor];
-}
-
-async function loadStreamOpenAIResponses(): Promise<StreamOpenAIResponses> {
-	const [major, minor] = piAiMajorMinor();
-	// A real `import()` so jiti, which evaluates extensions inside a vm, can
-	// supply its dynamic-import callback. `new Function("return import()")`
-	// throws ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING there and the extension
-	// never loads. The specifier is a variable so typechecking does not require
-	// both subpaths to exist in the installed pi-ai.
-	const specifier = major > 0 || minor >= 80
-		? "@earendil-works/pi-ai/api/openai-responses"
-		: "@earendil-works/pi-ai/openai-responses";
-	const mod = (await import(specifier)) as {
-		streamSimple?: StreamOpenAIResponses;
-		streamSimpleOpenAIResponses?: StreamOpenAIResponses;
-	};
-	const stream = mod.streamSimple ?? mod.streamSimpleOpenAIResponses;
-	if (!stream) {
-		throw new Error(`pi-grok: ${specifier} did not export the OpenAI responses streamer.`);
-	}
-	return stream;
-}
-
+// Which specifier carries the responses streamer depends on the host's alias
+// table, not on pi-ai's version, so the probe lives in streamer.ts and picks the
+// first layout that works. Top-level await: it resolves before the factory runs.
 const streamSimpleOpenAIResponses = await loadStreamOpenAIResponses();
 
 function streamGrok(
