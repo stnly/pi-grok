@@ -115,7 +115,17 @@ function normalizeImageInput(value: unknown): string | undefined {
 	}
 
 	const mimeType = imageMimeTypeForPath(localPath);
-	const data = readFileSync(localPath).toString("base64");
+	// The `existsSync` above only filters candidates; the file can still turn
+	// out to be a directory or vanish before the read. A raw fs error here
+	// would surface as an unexplained request failure, so name the path.
+	let data: string;
+	try {
+		data = readFileSync(localPath).toString("base64");
+	} catch (cause) {
+		throw new Error(
+			`Image file could not be read: ${localPath} (${cause instanceof Error ? cause.message : String(cause)})`,
+		);
+	}
 	return `data:${mimeType};base64,${data}`;
 }
 
@@ -248,6 +258,29 @@ function stripSlashEnumsFromTools(tools: unknown[]): void {
 }
 
 /**
+ * Tool schemas with slash-bearing enums removed, or `undefined` when there is
+ * nothing to send.
+ *
+ * The schemas are nested objects shared with the caller's payload, so the
+ * removal runs on a deep clone: deleting an enum in place would mutate the
+ * host's tool definitions. A schema holding something `structuredClone`
+ * cannot copy (a class instance or function from an MCP server, say) must not
+ * fail the whole request, so the untouched schemas go out instead — xAI
+ * tolerating a leftover enum is a far better outcome than a dead turn.
+ */
+function sanitizedTools(tools: unknown[]): unknown[] | undefined {
+	if (tools.length === 0) return undefined;
+	let copy: unknown[];
+	try {
+		copy = structuredClone(tools) as unknown[];
+	} catch {
+		return tools;
+	}
+	stripSlashEnumsFromTools(copy);
+	return copy;
+}
+
+/**
  * Sanitize a provider request payload for xAI's Responses API.
  *
  * Returns a shallow-cloned copy; the caller's payload object is not mutated.
@@ -283,15 +316,19 @@ export function sanitizePayload(
 		// Move system/developer messages to top-level instructions.
 		// xAI rejects role: "developer" and role: "system" in the input array.
 		const instructionParts: string[] = [];
-		while (input.length > 0) {
-			const first = input[0];
+		// Scan forward rather than shifting: `shift()` memmoves the whole array
+		// on every leading system message.
+		let leadingInstructions = 0;
+		while (leadingInstructions < input.length) {
+			const first = input[leadingInstructions];
 			if (!first || typeof first !== "object") break;
 			const role = (first as Record<string, unknown>).role;
 			if (role !== "developer" && role !== "system") break;
 			const text = textFromContent((first as Record<string, unknown>).content).trim();
 			if (text) instructionParts.push(text);
-			input.shift();
+			leadingInstructions += 1;
 		}
+		if (leadingInstructions > 0) input = input.slice(leadingInstructions);
 		if (instructionParts.length > 0) {
 			const existing = typeof next.instructions === "string" && next.instructions ? next.instructions : "";
 			const merged = [existing, ...instructionParts].filter((part) => part.length > 0).join("\n\n");
@@ -350,13 +387,9 @@ export function sanitizePayload(
 	delete next.service_tier;
 
 	// Empty tools array is rejected; drop it entirely when nothing remains.
-	// Deep-clone first: the tool schemas are nested objects shared with the
-	// caller's payload, so deleting an enum in place would mutate the host's
-	// tool definitions (the shallow clone only broke the top-level reference).
 	if (Array.isArray(next.tools)) {
-		const tools = structuredClone(next.tools) as unknown[];
-		stripSlashEnumsFromTools(tools);
-		if (tools.length > 0) next.tools = tools;
+		const tools = sanitizedTools(next.tools);
+		if (tools) next.tools = tools;
 		else delete next.tools;
 	}
 

@@ -101,10 +101,13 @@ function platformLabel(): string {
  * (Authorization, Content-Type) without aliasing a shared constant.
  */
 export function buildProxyHeaders(modelId?: string): Record<string, string> {
+	// Resolved once: the version comes from a synchronous cache read, and both
+	// the User-Agent and the version header have to agree on it.
+	const version = resolveClientVersion();
 	const headers: Record<string, string> = {
-		"User-Agent": `${CLIENT_IDENTIFIER}/${resolveClientVersion()} (${platformLabel()})`,
+		"User-Agent": `${CLIENT_IDENTIFIER}/${version} (${platformLabel()})`,
 		"x-grok-client-identifier": CLIENT_IDENTIFIER,
-		"x-grok-client-version": resolveClientVersion(),
+		"x-grok-client-version": version,
 		"x-grok-client-mode": "interactive",
 		"X-XAI-Token-Auth": "xai-grok-cli",
 		"x-authenticateresponse": "authenticate-response",

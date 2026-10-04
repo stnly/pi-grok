@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import { writeFileSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sanitizePayload } from "./sanitize.js";
@@ -285,6 +285,28 @@ describe("sanitizePayload image normalization", () => {
 		expect(content[0].image_url).toBe("https://x.ai/a.png");
 	});
 
+	it("names the path when a local image cannot be read", () => {
+		// `existsSync` filters candidates, so a directory named like an image
+		// still gets through. Without the guard the fs error surfaces as an
+		// unexplained request failure.
+		const base = mkdtempSync(join(tmpdir(), "pi-grok-img-"));
+		const dir = join(base, "shot.png");
+		mkdirSync(dir);
+		try {
+			expect(() =>
+				sanitizePayload(
+					{
+						model: "grok-4.5",
+						input: [{ role: "user", content: [{ type: "input_image", image_url: dir }] }],
+					},
+					"grok-4.5",
+				),
+			).toThrow(/Image file could not be read/);
+		} finally {
+			rmSync(base, { recursive: true, force: true });
+		}
+	});
+
 	it("passes http(s) and data URIs through resolved", () => {
 		const p = sanitizePayload(
 			{
@@ -494,5 +516,31 @@ describe("sanitizePayload field parity", () => {
 		// The caller's tool schema is untouched; only the returned copy loses the enum.
 		expect(original).toEqual(snapshot);
 		expect(original[0].parameters.properties.mode.enum).toEqual(["read/write", "read-only"]);
+	});
+
+	it("sends tool schemas unchanged when they cannot be deep-cloned", () => {
+		// An MCP server can hand the host a schema holding a value
+		// structuredClone refuses (here a function). Stripping an enum is
+		// cosmetic; failing the turn is not, so the schemas go out as they are.
+		const tools = [
+			{
+				type: "function",
+				name: "from_mcp",
+				parameters: {
+					type: "object",
+					properties: { mode: { type: "string", enum: ["read/write"] } },
+					validate: () => true,
+				},
+			},
+		];
+		const p = sanitizePayload({ ...basePayload(), tools } as Record<string, unknown>, "grok-4.5");
+		expect(p.tools).toBe(tools);
+		const sent = p.tools as any[];
+		expect(sent[0].parameters.properties.mode.enum).toEqual(["read/write"]);
+	});
+
+	it("drops the tools field when there is nothing to send", () => {
+		const p = sanitizePayload({ ...basePayload(), tools: [] } as Record<string, unknown>, "grok-4.5");
+		expect("tools" in p).toBe(false);
 	});
 });

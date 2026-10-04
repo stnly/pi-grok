@@ -52,12 +52,19 @@ interface WalkState {
  * input eventually trips the node-count ceiling, which is the only defense
  * `JSON.parse` itself does not provide.
  */
-export function assertBoundedJson(
+export function assertBoundedJson(value: unknown, options: BoundedJsonOptions = {}): void {
+	// Resolved once per call, not once per node: the recursion used to merge
+	// the defaults into a new options object at every step, which allocated an
+	// object per node walked.
+	walkBoundedJson(value, { ...DEFAULT_BOUNDED_JSON_OPTIONS, ...options }, { depth: 0, nodes: 0 });
+}
+
+/** Walk `value` under already-resolved limits. Recursive; not exported. */
+function walkBoundedJson(
 	value: unknown,
-	options: BoundedJsonOptions = {},
-	state: WalkState = { depth: 0, nodes: 0 },
+	opts: Required<BoundedJsonOptions>,
+	state: WalkState,
 ): void {
-	const opts = { ...DEFAULT_BOUNDED_JSON_OPTIONS, ...options };
 	state.nodes += 1;
 	if (state.nodes > opts.maxNodes) {
 		throw new BoundedJsonError("JSON response exceeded the maximum node count.");
@@ -71,7 +78,7 @@ export function assertBoundedJson(
 			throw new BoundedJsonError("JSON response contained an array that exceeded the maximum length.");
 		}
 		state.depth += 1;
-		for (const item of value) assertBoundedJson(item, opts, state);
+		for (const item of value) walkBoundedJson(item, opts, state);
 		state.depth -= 1;
 		return;
 	}
@@ -86,7 +93,7 @@ export function assertBoundedJson(
 		}
 		state.depth += 1;
 		for (const k of keys) {
-			assertBoundedJson((value as Record<string, unknown>)[k], opts, state);
+			walkBoundedJson((value as Record<string, unknown>)[k], opts, state);
 		}
 		state.depth -= 1;
 	}
