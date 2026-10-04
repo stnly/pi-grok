@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sanitizePayload } from "./sanitize.js";
+import { refreshCatalogNow, resetDiscoveryForTests, _setCatalogCachePathForTests } from "./models.js";
 
 function basePayload(over: Record<string, unknown> = {}): Record<string, unknown> {
 	return { model: "grok-4.5", input: [{ role: "user", content: "hi" }], ...over };
@@ -89,6 +90,44 @@ describe("sanitizePayload reasoning effort", () => {
 				"grok-4.20-0309-non-reasoning",
 			);
 			expect(p.reasoning).toBeUndefined();
+		});
+	});
+
+	// Regression: the effort gate used to be a hardcoded prefix list, so every
+	// new Grok id silently lost `reasoning` (and therefore thinking) until the
+	// list was edited. The live catalog flag now decides it.
+	describe("effort capability discovered at runtime", () => {
+		const originalFetch = globalThis.fetch;
+
+		beforeEach(() => {
+			resetDiscoveryForTests();
+			_setCatalogCachePathForTests("");
+			globalThis.fetch = vi.fn(async () =>
+				new Response(
+					JSON.stringify({
+						data: [{ id: "grok-4.8", context_window: 500_000, supports_reasoning_effort: true }],
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				),
+			) as unknown as typeof fetch;
+		});
+
+		afterEach(() => {
+			globalThis.fetch = originalFetch;
+			resetDiscoveryForTests();
+			vi.clearAllMocks();
+		});
+
+		it("keeps effort for an id absent from the fallback list", async () => {
+			expect(
+				sanitizePayload({ ...basePayload(), reasoning: { effort: "high" } }, "grok-4.8").reasoning,
+			).toBeUndefined();
+			await refreshCatalogNow("token");
+			const p = sanitizePayload(
+				{ ...basePayload(), reasoning: { effort: "high", summary: "auto" } },
+				"grok-4.8",
+			);
+			expect(p.reasoning).toEqual({ effort: "high" });
 		});
 	});
 

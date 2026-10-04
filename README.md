@@ -80,6 +80,11 @@ drive routing. The merge reads the proxy field names (`context_window`,
 `context_windows`, `name`, `supports_reasoning_effort`) and still accepts the
 OpenAI names (`context_length`, `max_output_tokens`) if they appear. When the
 proxy sends `context_windows`, the registered window is the largest entry.
+`supports_reasoning_effort` is authoritative for the thinking dial as well: it
+decides both the levels the picker offers and whether the sanitizer keeps
+`reasoning` on the wire, so a newly released Grok id gets thinking without a
+code change. The hardcoded prefix list is the fallback for a cold catalog, an
+id the proxy does not list, or a proxy that omits the field.
 grok-4.5, grok-4.6, grok-4.7, and grok-4.7-build-fast advertise a 256k default and a 500k extended
 window, so they register at 500k. Until that fetch succeeds, the picker shows
 the built-in list. The on-disk catalog is read in the background and is not
@@ -231,7 +236,7 @@ pi-grok/
 
 - **Payload sanitization via `before_provider_request`** - decoupled from streaming, visible to other extensions, chainable.
 - **X Search tool** - proxy via `pi.registerTool`. Any model can search X. Per-query parameters supported.
-- **Live model catalog** - fetches `cli-chat-proxy.grok.com/v1/models` on login for enrichment (context windows, new ids); routing also goes through the CLI chat proxy so requests ride the SuperGrok quota. The merge reads the proxy's `context_window` / `context_windows` / `name` / `supports_reasoning_effort` fields (and the OpenAI `context_length` / `max_output_tokens` names if present). `context_windows` wins when present, and the registered window is its largest entry. The catalog body is cached on disk with a 15-minute fresh TTL and a 7-day stale-if-transient window. A cold start still shows the built-in list until a fetch succeeds and re-registers the provider. A successful fetch re-registers the provider so the picker updates in place. Transient fetch failures retry with backoff (10s / 30s / 90s); `/xai-status` kicks a fresh sequence after the budget is spent. `/model` fetches once through `refreshModels` and does not use that retry schedule.
+- **Live model catalog** - fetches `cli-chat-proxy.grok.com/v1/models` on login for enrichment (context windows, new ids); routing also goes through the CLI chat proxy so requests ride the SuperGrok quota. The merge reads the proxy's `context_window` / `context_windows` / `name` / `supports_reasoning_effort` fields (and the OpenAI `context_length` / `max_output_tokens` names if present). `context_windows` wins when present, and the registered window is its largest entry. `supports_reasoning_effort` also drives the sanitizer's effort gate, so a new id does not wait for the fallback prefix list to be edited. The catalog body is cached on disk with a 15-minute fresh TTL and a 7-day stale-if-transient window. A cold start still shows the built-in list until a fetch succeeds and re-registers the provider. A successful fetch re-registers the provider so the picker updates in place. Transient fetch failures retry with backoff (10s / 30s / 90s); `/xai-status` kicks a fresh sequence after the budget is spent. `/model` fetches once through `refreshModels` and does not use that retry schedule.
 - **Account + privacy commands** - `/xai-status` reads the cli-chat-proxy `/user` enrichment for account and retention state; `/xai-privacy` opens an inline themed picker (green-tick current row, matching the login selector) that toggles coding-data-retention via `PUT /privacy/coding-data-retention`.
 - **Subscription usage** - `/xai-usage` resolves the user id from `/user`, then reads `/billing?format=credits`. The response is size-bounded and parsed through a bounded-JSON walker; only the derived numeric fields render.
 - **OIDC signature verification** - `discover()` requires a JWKS URI pinned to the xAI origin and the signing alg ES256. Login and refresh verify id_token signatures against that JWKS via WebCrypto; a kid miss forces one uncached re-fetch so key rotation mid-TTL still works.
