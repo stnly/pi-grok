@@ -181,7 +181,7 @@ export function registerXSearchTool(pi: ExtensionAPI) {
 				}),
 			),
 		}),
-		async execute(toolCallId, params, signal, _onUpdate, ctx) {
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			const apiKey = await ctx.modelRegistry.getApiKeyForProvider("xai-oauth");
 			if (!apiKey) {
 				return {

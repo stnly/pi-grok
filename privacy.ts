@@ -31,7 +31,12 @@ export interface CustomUi {
 		factory: (
 			tui: unknown,
 			theme: Theme,
-			keybindings: ReturnType<typeof getKeybindings>,
+			// Declared `unknown` on purpose. The host passes its own
+			// KeybindingsManager, whose class is a separate declaration from the
+			// one in the pi-tui version this package depends on, so naming the
+			// type here makes `ctx.ui` structurally incompatible with `CustomUi`.
+			// The picker never reads it, so only the arity has to match.
+			keybindings: unknown,
 			done: (result: T) => void,
 		) => Component | Promise<Component>,
 		options?: { overlay?: boolean },
