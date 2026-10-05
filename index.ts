@@ -48,9 +48,9 @@ import { XaiOAuthError } from "./errors.js";
 import { registerXSearchTool } from "./x-search-tool.js";
 import { fetchUsage, formatUsageBlock, XaiUsageError } from "./usage.js";
 
-// Which specifier carries the responses streamer depends on the host's alias
-// table, not on pi-ai's version, so the probe lives in streamer.ts and picks the
-// first layout that works. Top-level await: it resolves before the factory runs.
+// Where the responses streamer lives depends on the host: the compat entry on
+// pi 1.0, and a version-picked subpath on every other pi-ai. streamer.ts
+// chooses it. Top-level await: it resolves before the factory runs.
 const streamSimpleOpenAIResponses = await loadStreamOpenAIResponses();
 
 function streamGrok(
