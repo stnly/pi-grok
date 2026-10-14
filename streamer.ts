@@ -18,11 +18,17 @@
  * pi-ai's own package resolves it to `dist/index.js`. pi 1.0's loader resolves
  * it to `dist/compat.js`. The compat entry is the pi 1.0 path and it is taken
  * directly, so the load never depends on an import failing first.
+ *
+ * A bundled host (the npm `pi` bin) embeds pi-ai as a virtual module. The root
+ * import reaches the compat surface and carries the legacy streamer name, but
+ * no filesystem entry or manifest exists, so resolution and the version sniff
+ * cannot run at all. An unresolvable package therefore falls through to a root
+ * import before giving up.
  */
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type {
 	AssistantMessageEventStream,
 	Context,
@@ -70,7 +76,10 @@ export interface PiAiLocation {
  * be resolved.
  */
 export function locatePiAi(resolve: (specifier: string) => string = (specifier) =>
-	import.meta.resolve(specifier),
+	// Parent the lookup on this file. import.meta.resolve walks from the
+	// calling module, and on Windows that parent has to be a file URL or the
+	// node_modules walk from a drive-letter path fails.
+	import.meta.resolve(specifier, pathToFileURL(import.meta.filename).href),
 ): PiAiLocation | undefined {
 	let entry: string;
 	try {
@@ -97,7 +106,10 @@ export function locatePiAi(resolve: (specifier: string) => string = (specifier) 
  * API-dispatching wrapper on the compat entry and on the >=0.80 package root.
  */
 export function streamerTarget(located: PiAiLocation): StreamerTarget {
-	if (located.entry.endsWith("/compat.js")) {
+	// fileURLToPath yields backslashes on Windows. Match the filename
+	// against either separator so the check holds on every platform, including
+	// when a test feeds a Windows path to a POSIX host.
+	if (/(^|[\/\\])compat\.js$/.test(located.entry)) {
 		return { specifier: ROOT_SPECIFIER, exportName: "streamSimpleOpenAIResponses" };
 	}
 	const [major, minor] = located.version;
@@ -115,6 +127,15 @@ export async function loadStreamOpenAIResponses(
 ): Promise<StreamOpenAIResponses> {
 	const located = locatePiAi(resolve);
 	if (!located) {
+		// No entry, no manifest: a bundled host embeds pi-ai as a virtual module
+		// whose root import is the compat surface. Import it and take the legacy
+		// name directly; when that import fails too, pi-ai is genuinely absent.
+		const mod = await importModuleFn(ROOT_SPECIFIER).then(
+			(root) => root,
+			() => undefined,
+		);
+		const stream = mod?.streamSimpleOpenAIResponses;
+		if (typeof stream === "function") return stream as StreamOpenAIResponses;
 		throw new Error("pi-grok: the installed pi-ai could not be resolved.");
 	}
 	const target = streamerTarget(located);

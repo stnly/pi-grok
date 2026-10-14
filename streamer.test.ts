@@ -1,6 +1,6 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadStreamOpenAIResponses, locatePiAi, streamerTarget, type StreamerImporter } from "./streamer.js";
@@ -65,6 +65,16 @@ describe("streamerTarget", () => {
 		// The compat entry's streamSimple is the dispatching wrapper, so the target
 		// names the legacy export and nothing else.
 		expect(streamerTarget({ entry: entry("compat.js"), version: [1, 0] })).toEqual({
+			specifier: "@earendil-works/pi-ai",
+			exportName: "streamSimpleOpenAIResponses",
+		});
+	});
+
+	it("treats a Windows compat path as the pi 1.0 entry", () => {
+		// fileURLToPath uses backslashes on Windows, so a forward-slash suffix
+		// would miss the compat entry and import a subpath the alias table lacks.
+		const entry = win32.join("C:\\pi", "node_modules", "@earendil-works", "pi-ai", "dist", "compat.js");
+		expect(streamerTarget({ entry, version: [1, 2] })).toEqual({
 			specifier: "@earendil-works/pi-ai",
 			exportName: "streamSimpleOpenAIResponses",
 		});
@@ -156,13 +166,27 @@ describe("loadStreamOpenAIResponses", () => {
 		install.cleanup();
 	});
 
-	it("fails loudly when the pi-ai package cannot be resolved", async () => {
-		const importModule = importerFor({
-			"@earendil-works/pi-ai": { streamSimpleOpenAIResponses: stream },
-		});
+	it("loads from the virtual root of a bundled host when nothing resolves", async () => {
+		// The npm `pi` bin embeds pi-ai as a virtual module: import.meta.resolve
+		// throws, so no entry or manifest can be read, but the root import
+		// carries the compat surface with the legacy streamer name.
+		const seen: string[] = [];
 		const resolve = () => {
-			throw new Error("ERR_MODULE_NOT_FOUND");
+			throw new Error("Cannot find module '@earendil-works/pi-ai'");
 		};
+		const importModule: StreamerImporter = async (specifier) => {
+			seen.push(specifier);
+			return { streamSimpleOpenAIResponses: stream };
+		};
+		await expect(loadStreamOpenAIResponses(importModule, resolve)).resolves.toBe(stream);
+		expect(seen).toEqual(["@earendil-works/pi-ai"]);
+	});
+
+	it("rejects when nothing resolves and the root import fails too", async () => {
+		const resolve = () => {
+			throw new Error("Cannot find module '@earendil-works/pi-ai'");
+		};
+		const importModule = importerFor({});
 		await expect(loadStreamOpenAIResponses(importModule, resolve)).rejects.toThrow(/could not be resolved/);
 	});
 
