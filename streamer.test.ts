@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadStreamOpenAIResponses, locatePiAi, streamerTarget, type StreamerImporter } from "./streamer.js";
+import { loadStreamOpenAIResponses, locatePiAi, streamerTarget, type SpecifierResolver, type StreamerImporter } from "./streamer.js";
 
 const stream = vi.fn();
 
@@ -153,6 +153,65 @@ describe("loadStreamOpenAIResponses", () => {
 		install.cleanup();
 	});
 
+	it("falls back to the package root when the subpath cannot resolve", async () => {
+		// Hosts before pi 1.0 alias only the package root, so a bare install on
+		// pi 0.74 cannot resolve the legacy subpath even though the export
+		// exists in the package. The probe moves the target to the root, which
+		// pi-ai re-exports the legacy streamer name from, and only that import
+		// is attempted.
+		const install = piAiInstall("0.74.0", "index.js");
+		const seen: string[] = [];
+		const resolve: SpecifierResolver = (specifier) => {
+			if (specifier === "@earendil-works/pi-ai/openai-responses") {
+				throw new Error(`Cannot find module '${specifier}'`);
+			}
+			return install.entry;
+		};
+		const importModule: StreamerImporter = async (specifier) => {
+			seen.push(specifier);
+			return { streamSimpleOpenAIResponses: stream };
+		};
+		await expect(loadStreamOpenAIResponses(importModule, resolve)).resolves.toBe(stream);
+		expect(seen).toEqual(["@earendil-works/pi-ai"]);
+		install.cleanup();
+	});
+
+	it("falls back under the legacy name when the api subpath cannot resolve", async () => {
+		// The >=0.80 target wants streamSimple, but the root that answers the
+		// fallback carries the legacy name. Accepting streamSimple from a root
+		// would run the API-dispatching wrapper instead of this streamer.
+		const install = piAiInstall("0.85.0", "index.js");
+		const resolve: SpecifierResolver = (specifier) => {
+			if (specifier === "@earendil-works/pi-ai/api/openai-responses") {
+				throw new Error(`Cannot find module '${specifier}'`);
+			}
+			return install.entry;
+		};
+		const importModule = importerFor({
+			"@earendil-works/pi-ai": { streamSimpleOpenAIResponses: stream, streamSimple: vi.fn() },
+		});
+		await expect(loadStreamOpenAIResponses(importModule, resolve)).resolves.toBe(stream);
+		install.cleanup();
+	});
+
+	it("does not probe the root for a target that already uses it", async () => {
+		// The compat entry target is the package root. Probing it for
+		// reachability would ask the same question the import answers, and a
+		// resolution failure there must surface, not trigger a self-fallback.
+		const install = piAiInstall("1.0.0", "compat.js");
+		const probed: string[] = [];
+		const resolve: SpecifierResolver = (specifier) => {
+			probed.push(specifier);
+			return install.entry;
+		};
+		const importModule: StreamerImporter = async () => {
+			throw new Error("Cannot find module");
+		};
+		await expect(loadStreamOpenAIResponses(importModule, resolve)).rejects.toThrow(/did not export/);
+		expect(probed).toEqual(["@earendil-works/pi-ai"]);
+		install.cleanup();
+	});
+
 	it("rejects the dispatching wrapper the compat entry also exports", async () => {
 		// compat's streamSimple routes by API instead of being the responses
 		// streamer. Accepting it would report the load as fine and stream wrong.
@@ -166,12 +225,24 @@ describe("loadStreamOpenAIResponses", () => {
 		install.cleanup();
 	});
 
+
+	it("ignores a non-function export of the right name", async () => {
+		const install = piAiInstall("0.85.0", "index.js");
+		const importModule = importerFor({
+			"@earendil-works/pi-ai/api/openai-responses": { streamSimple: "not a function" },
+		});
+		await expect(loadStreamOpenAIResponses(importModule, () => install.entry)).rejects.toThrow(
+			/did not export streamSimple/,
+		);
+		install.cleanup();
+	});
+
 	it("loads from the virtual root of a bundled host when nothing resolves", async () => {
 		// The npm `pi` bin embeds pi-ai as a virtual module: import.meta.resolve
 		// throws, so no entry or manifest can be read, but the root import
 		// carries the compat surface with the legacy streamer name.
 		const seen: string[] = [];
-		const resolve = () => {
+		const resolve: SpecifierResolver = () => {
 			throw new Error("Cannot find module '@earendil-works/pi-ai'");
 		};
 		const importModule: StreamerImporter = async (specifier) => {
@@ -183,22 +254,11 @@ describe("loadStreamOpenAIResponses", () => {
 	});
 
 	it("rejects when nothing resolves and the root import fails too", async () => {
-		const resolve = () => {
+		const resolve: SpecifierResolver = () => {
 			throw new Error("Cannot find module '@earendil-works/pi-ai'");
 		};
 		const importModule = importerFor({});
 		await expect(loadStreamOpenAIResponses(importModule, resolve)).rejects.toThrow(/could not be resolved/);
-	});
-
-	it("ignores a non-function export of the right name", async () => {
-		const install = piAiInstall("0.85.0", "index.js");
-		const importModule = importerFor({
-			"@earendil-works/pi-ai/api/openai-responses": { streamSimple: "not a function" },
-		});
-		await expect(loadStreamOpenAIResponses(importModule, () => install.entry)).rejects.toThrow(
-			/did not export streamSimple/,
-		);
-		install.cleanup();
 	});
 
 	it("names the version and the specifier when nothing resolves", async () => {

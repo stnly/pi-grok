@@ -19,6 +19,15 @@
  * it to `dist/compat.js`. The compat entry is the pi 1.0 path and it is taken
  * directly, so the load never depends on an import failing first.
  *
+ * Hosts before pi 1.0 alias only the package root, not the subpaths, so in an
+ * installed layout (no node_modules beside the source) the version-selected
+ * subpath specifier cannot resolve even though the export exists in the
+ * package. Reachability is asked of the host before importing: when the
+ * canonical subpath does not resolve, the package root is aliased on every
+ * host generation and pi-ai re-exports the legacy streamer name from it below
+ * 0.80, so the target moves to the root. Resolution never evaluates a module,
+ * so the probe cannot mistake a broken module for an unreachable one.
+ *
  * A bundled host (the npm `pi` bin) embeds pi-ai as a virtual module. The root
  * import reaches the compat surface and carries the legacy streamer name, but
  * no filesystem entry or manifest exists, so resolution and the version sniff
@@ -53,8 +62,27 @@ export type StreamerImporter = (specifier: string) => Promise<StreamerModule>;
 
 const importModule: StreamerImporter = (specifier) => import(specifier);
 
+/** Injectable so the reachability probe can be tested without a host. */
+export type SpecifierResolver = (specifier: string) => string;
+
+/** Resolve parented on this file. On Windows the parent has to be a file URL
+ * or the node_modules walk from a drive-letter path fails; see locatePiAi. */
+const defaultResolve: SpecifierResolver = (specifier) =>
+	import.meta.resolve(specifier, pathToFileURL(import.meta.filename).href);
+
 /** The package root. pi 1.0's loader aliases this to the compat entry. */
 const ROOT_SPECIFIER = "@earendil-works/pi-ai";
+
+/** Whether the host can resolve `specifier` from extension code. Resolution
+ * never evaluates the module, so a throw means unreachable, not broken. */
+function resolvable(resolve: SpecifierResolver, specifier: string): boolean {
+	try {
+		resolve(specifier);
+		return true;
+	} catch {
+		return false;
+	}
+}
 
 /** Where the responses streamer lives on one host layout, and the name it is exported under. */
 export interface StreamerTarget {
@@ -75,12 +103,7 @@ export interface PiAiLocation {
  * from beside the resolved entry. Returns `undefined` when the package cannot
  * be resolved.
  */
-export function locatePiAi(resolve: (specifier: string) => string = (specifier) =>
-	// Parent the lookup on this file. import.meta.resolve walks from the
-	// calling module, and on Windows that parent has to be a file URL or the
-	// node_modules walk from a drive-letter path fails.
-	import.meta.resolve(specifier, pathToFileURL(import.meta.filename).href),
-): PiAiLocation | undefined {
+export function locatePiAi(resolve: SpecifierResolver = defaultResolve): PiAiLocation | undefined {
 	let entry: string;
 	try {
 		entry = fileURLToPath(resolve(ROOT_SPECIFIER));
@@ -123,7 +146,7 @@ export function streamerTarget(located: PiAiLocation): StreamerTarget {
  */
 export async function loadStreamOpenAIResponses(
 	importModuleFn: StreamerImporter = importModule,
-	resolve?: (specifier: string) => string,
+	resolve: SpecifierResolver = defaultResolve,
 ): Promise<StreamOpenAIResponses> {
 	const located = locatePiAi(resolve);
 	if (!located) {
@@ -138,7 +161,13 @@ export async function loadStreamOpenAIResponses(
 		if (typeof stream === "function") return stream as StreamOpenAIResponses;
 		throw new Error("pi-grok: the installed pi-ai could not be resolved.");
 	}
-	const target = streamerTarget(located);
+	let target = streamerTarget(located);
+	// A subpath the host's loader cannot alias is unreachable in an installed
+	// layout. The package root is aliased on every host generation, so move
+	// the target there under the legacy name pi-ai re-exports below 0.80.
+	if (target.specifier !== ROOT_SPECIFIER && !resolvable(resolve, target.specifier)) {
+		target = { specifier: ROOT_SPECIFIER, exportName: "streamSimpleOpenAIResponses" };
+	}
 	const missing = () =>
 		new Error(
 			`pi-grok: pi-ai ${located.version.join(".")} did not export ${target.exportName} from ${target.specifier}.`,
