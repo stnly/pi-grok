@@ -28,7 +28,10 @@ describe("extension load without a local pi-ai", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("loads through the host loader when no pi-ai sits beside the source", async () => {
+	// Loading through the host loader compiles the whole extension and imports
+	// the host's loader graph. On a slow disk that alone can exceed the 5s
+	// vitest default, so allow plenty of headroom.
+	it("loads through the host loader when no pi-ai sits beside the source", { timeout: 120_000 }, async () => {
 		cpSync(new URL(".", import.meta.url), dir, {
 			recursive: true,
 			filter: (path) => !path.includes("node_modules"),
