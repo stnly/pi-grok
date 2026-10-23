@@ -47,7 +47,9 @@ interface VersionRecord {
 
 function versionCachePath(): string {
 	try {
-		return join(getAgentDir(), "cache", "pi-grok", "version.json");
+		const dir = getAgentDir();
+		if (!dir) return "";
+		return join(dir, "cache", "pi-grok", "version.json");
 	} catch {
 		return "";
 	}

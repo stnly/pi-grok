@@ -6,3 +6,4 @@ package-lock.json
 *.d.ts
 *.d.ts.map
 !package.json
+cache/
