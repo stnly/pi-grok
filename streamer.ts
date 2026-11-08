@@ -10,14 +10,16 @@
  *   `@earendil-works/pi-ai/api/openai-responses`. Its package root exports a
  *   `streamSimple` too, but that one dispatches across APIs instead of being
  *   this streamer.
- * - pi 1.0 aliases `@earendil-works/pi-ai` to the compat entry, which
+ * - pi's loader aliases `@earendil-works/pi-ai` to a compat entry, which
  *   re-exports the legacy `streamSimpleOpenAIResponses`. The `/api` subpath is
  *   not in that alias table, so the >=0.80 import cannot resolve there.
  *
  * Which of the three a host is shows up in where the package root resolves.
- * pi-ai's own package resolves it to `dist/index.js`. pi 1.0's loader resolves
- * it to `dist/compat.js`. The compat entry is the pi 1.0 path and it is taken
- * directly, so the load never depends on an import failing first.
+ * pi-ai's own package resolves it to `dist/index.js`. Host loaders resolve it
+ * to `dist/compat.js` or `dist/core/extensions/pi-ai-compat.js`. Recognize these
+ * aliases before looking for a package manifest: the SDK alias is inside the
+ * coding-agent package, not beside pi-ai's manifest. Import the root directly,
+ * without a version sniff or depending on an import failing first.
  *
  * Hosts before pi 1.0 alias only the package root, not the subpaths, so in an
  * installed layout (no node_modules beside the source) the version-selected
@@ -93,11 +95,18 @@ export interface StreamerTarget {
 export interface PiAiLocation {
 	/** Where the package root resolved, as a filesystem path. */
 	entry: string;
-	version: [number, number];
+	/** Real package version; absent for a host-owned compat alias. */
+	version?: [number, number];
+}
+
+/** Both host aliases expose the legacy streamer; neither needs a manifest.
+ * Match both separators for Windows paths, even on a POSIX test host. */
+function isCompatEntry(entry: string): boolean {
+	return /(^|[\/\\])(?:pi-ai-)?compat\.js$/.test(entry);
 }
 
 /**
- * Resolve the installed pi-ai and read its version.
+ * Resolve pi-ai, recognizing host compat aliases before reading a version.
  *
  * `package.json` is not an exported subpath, so the manifest is read off disk
  * from beside the resolved entry. Returns `undefined` when the package cannot
@@ -110,6 +119,7 @@ export function locatePiAi(resolve: SpecifierResolver = defaultResolve): PiAiLoc
 	} catch {
 		return undefined;
 	}
+	if (isCompatEntry(entry)) return { entry };
 	const { version } = JSON.parse(readFileSync(join(dirname(entry), "..", "package.json"), "utf8")) as {
 		version: string;
 	};
@@ -121,7 +131,7 @@ export function locatePiAi(resolve: SpecifierResolver = defaultResolve): PiAiLoc
  * The specifier and export name that carry the responses streamer for an
  * installed pi-ai.
  *
- * pi 1.0's loader aliases the package root to `dist/compat.js`, which
+ * Host loaders alias the package root to a compat entry, which
  * re-exports the legacy name, while pi-ai's own package resolves the root to
  * `dist/index.js`. The entry filename is what separates that host from the
  * version split: `./openai-responses` below 0.80, `./api/openai-responses` from
@@ -129,12 +139,10 @@ export function locatePiAi(resolve: SpecifierResolver = defaultResolve): PiAiLoc
  * API-dispatching wrapper on the compat entry and on the >=0.80 package root.
  */
 export function streamerTarget(located: PiAiLocation): StreamerTarget {
-	// fileURLToPath yields backslashes on Windows. Match the filename
-	// against either separator so the check holds on every platform, including
-	// when a test feeds a Windows path to a POSIX host.
-	if (/(^|[\/\\])compat\.js$/.test(located.entry)) {
+	if (isCompatEntry(located.entry)) {
 		return { specifier: ROOT_SPECIFIER, exportName: "streamSimpleOpenAIResponses" };
 	}
+	if (!located.version) throw new Error("pi-grok: a non-compat pi-ai entry requires a package version.");
 	const [major, minor] = located.version;
 	return major > 0 || minor >= 80
 		? { specifier: "@earendil-works/pi-ai/api/openai-responses", exportName: "streamSimple" }
@@ -170,13 +178,13 @@ export async function loadStreamOpenAIResponses(
 	}
 	const missing = () =>
 		new Error(
-			`pi-grok: pi-ai ${located.version.join(".")} did not export ${target.exportName} from ${target.specifier}.`,
+			`pi-grok: pi-ai ${located.version?.join(".") ?? "host compat"} did not export ${target.exportName} from ${target.specifier}.`,
 		);
 	let mod: StreamerModule;
 	try {
 		mod = await importModuleFn(target.specifier);
-	} catch {
-		throw missing();
+	} catch (cause) {
+		throw new Error(missing().message, { cause });
 	}
 	const stream = mod[target.exportName];
 	if (typeof stream !== "function") throw missing();
