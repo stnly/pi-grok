@@ -16,7 +16,7 @@
  *
  * Which of the three a host is shows up in where the package root resolves.
  * pi-ai's own package resolves it to `dist/index.js`. Host loaders resolve it
- * to `dist/compat.js` or `dist/core/extensions/pi-ai-compat.js`. Recognize these
+ * to `dist/compat.js` or `dist/core/extensions/pi-ai-extension-view.js`. Recognize these
  * aliases before looking for a package manifest: the SDK alias is inside the
  * coding-agent package, not beside pi-ai's manifest. Import the root directly,
  * without a version sniff or depending on an import failing first.
@@ -102,7 +102,7 @@ export interface PiAiLocation {
 /** Both host aliases expose the legacy streamer; neither needs a manifest.
  * Match both separators for Windows paths, even on a POSIX test host. */
 function isCompatEntry(entry: string): boolean {
-	return /(^|[\/\\])(?:pi-ai-)?compat\.js$/.test(entry);
+	return /(^|[\/\\])(?:compat|pi-ai-extension-view)\.js$/.test(entry);
 }
 
 /**

@@ -32,7 +32,7 @@ function piAiInstall(version: string, entryName: string): { entry: string; clean
 }
 
 /** SDK aliases live deep inside coding-agent, without a pi-ai manifest nearby. */
-function sdkAlias(entryName = "pi-ai-compat.js"): { entry: string; cleanup: () => void } {
+function sdkAlias(entryName = "pi-ai-extension-view.js"): { entry: string; cleanup: () => void } {
 	const root = mkdtempSync(join(tmpdir(), "pi-grok-sdk-"));
 	const directory = join(root, "dist", "core", "extensions");
 	mkdirSync(directory, { recursive: true });
@@ -69,7 +69,7 @@ describe("locatePiAi", () => {
 		expect(locatePiAi(() => install.entry)?.version).toEqual([1, 0]);
 	});
 
-	it.each(["compat.js", "pi-ai-compat.js"])("recognizes %s without reading an adjacent manifest", (name) => {
+	it.each(["compat.js", "pi-ai-extension-view.js"])("recognizes %s without reading an adjacent manifest", (name) => {
 		const install = sdkAlias(name);
 		cleanups.push(install.cleanup);
 		expect(locatePiAi(() => install.entry)).toEqual({ entry: expect.any(String) });
@@ -105,7 +105,7 @@ describe("streamerTarget", () => {
 	});
 
 	it("recognizes a deep Windows SDK alias without inventing a package version", () => {
-		const entry = win32.join("C:\\pi", "dist", "core", "extensions", "pi-ai-compat.js");
+		const entry = win32.join("C:\\pi", "dist", "core", "extensions", "pi-ai-extension-view.js");
 		expect(streamerTarget({ entry })).toEqual({
 			specifier: "@earendil-works/pi-ai",
 			exportName: "streamSimpleOpenAIResponses",
