@@ -31,6 +31,18 @@ function piAiInstall(version: string, entryName: string): { entry: string; clean
 	};
 }
 
+/** SDK aliases live deep inside coding-agent, without a pi-ai manifest nearby. */
+function sdkAlias(entryName = "pi-ai-extension-view.js"): { entry: string; cleanup: () => void } {
+	const root = mkdtempSync(join(tmpdir(), "pi-grok-sdk-"));
+	const directory = join(root, "dist", "core", "extensions");
+	mkdirSync(directory, { recursive: true });
+	writeFileSync(join(directory, entryName), "");
+	return {
+		entry: pathToFileURL(join(directory, entryName)).href,
+		cleanup: () => rmSync(root, { recursive: true, force: true }),
+	};
+}
+
 describe("locatePiAi", () => {
 	const cleanups: Array<() => void> = [];
 	afterEach(() => {
@@ -56,6 +68,18 @@ describe("locatePiAi", () => {
 		cleanups.push(install.cleanup);
 		expect(locatePiAi(() => install.entry)?.version).toEqual([1, 0]);
 	});
+
+	it.each(["compat.js", "pi-ai-extension-view.js"])("recognizes %s without reading an adjacent manifest", (name) => {
+		const install = sdkAlias(name);
+		cleanups.push(install.cleanup);
+		expect(locatePiAi(() => install.entry)).toEqual({ entry: expect.any(String) });
+	});
+
+	it("does not disguise a missing real-package manifest as a compat alias", () => {
+		const install = sdkAlias("index.js");
+		cleanups.push(install.cleanup);
+		expect(() => locatePiAi(() => install.entry)).toThrow(/ENOENT/);
+	});
 });
 
 describe("streamerTarget", () => {
@@ -75,6 +99,14 @@ describe("streamerTarget", () => {
 		// would miss the compat entry and import a subpath the alias table lacks.
 		const entry = win32.join("C:\\pi", "node_modules", "@earendil-works", "pi-ai", "dist", "compat.js");
 		expect(streamerTarget({ entry, version: [1, 2] })).toEqual({
+			specifier: "@earendil-works/pi-ai",
+			exportName: "streamSimpleOpenAIResponses",
+		});
+	});
+
+	it("recognizes a deep Windows SDK alias without inventing a package version", () => {
+		const entry = win32.join("C:\\pi", "dist", "core", "extensions", "pi-ai-extension-view.js");
+		expect(streamerTarget({ entry })).toEqual({
 			specifier: "@earendil-works/pi-ai",
 			exportName: "streamSimpleOpenAIResponses",
 		});
@@ -151,6 +183,48 @@ describe("loadStreamOpenAIResponses", () => {
 		await expect(loadStreamOpenAIResponses(importModule, () => install.entry)).resolves.toBe(stream);
 		expect(seen).toEqual(["@earendil-works/pi-ai"]);
 		install.cleanup();
+	});
+
+	it("loads the SDK host alias without a manifest or probing package subpaths", async () => {
+		const install = sdkAlias();
+		try {
+			const resolve = vi.fn((specifier: string) => {
+				if (specifier !== "@earendil-works/pi-ai") throw new Error("unreachable subpath");
+				return install.entry;
+			});
+			const importModule = vi.fn(importerFor({
+				"@earendil-works/pi-ai": { streamSimpleOpenAIResponses: stream, streamSimple: vi.fn() },
+			}));
+			await expect(loadStreamOpenAIResponses(importModule, resolve)).resolves.toBe(stream);
+			expect(resolve.mock.calls).toEqual([["@earendil-works/pi-ai"]]);
+			expect(importModule.mock.calls).toEqual([["@earendil-works/pi-ai"]]);
+		} finally {
+			install.cleanup();
+		}
+	});
+
+	it("fails closed when the SDK alias exports only the dispatching wrapper", async () => {
+		const install = sdkAlias();
+		try {
+			const importModule = importerFor({ "@earendil-works/pi-ai": { streamSimple: stream } });
+			await expect(loadStreamOpenAIResponses(importModule, () => install.entry)).rejects.toThrow(
+				/host compat.*did not export streamSimpleOpenAIResponses/,
+			);
+		} finally {
+			install.cleanup();
+		}
+	});
+
+	it("preserves an SDK alias import failure instead of trying a different layout", async () => {
+		const install = sdkAlias();
+		try {
+			const cause = new Error("host module initialization failed");
+			const importModule = vi.fn(async () => { throw cause; });
+			await expect(loadStreamOpenAIResponses(importModule, () => install.entry)).rejects.toMatchObject({ cause });
+			expect(importModule.mock.calls).toEqual([["@earendil-works/pi-ai"]]);
+		} finally {
+			install.cleanup();
+		}
 	});
 
 	it("falls back to the package root when the subpath cannot resolve", async () => {
